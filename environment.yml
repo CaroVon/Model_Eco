@@ -1,0 +1,21 @@
+name: hfpa
+channels: [conda-forge]
+dependencies:
+  - python=3.11
+  - pandas
+  - pyarrow
+  - numpy
+  - scipy
+  - matplotlib
+  - statsmodels
+  - tqdm
+  - numba
+  - powerlaw
+  - datasets
+  - huggingface_hub
+  - jupyterlab
+  - pytest
+  - pyyaml
+  - pip
+  - pip:
+      - torch

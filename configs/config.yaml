@@ -1,0 +1,24 @@
+# 所有路径经 hfpa.paths 读取;数据根目录可由环境变量 ACMEC_DATA_ROOT 覆盖
+data_root: /net/spaces/jevans/klab/caroyf/data/ACMEC
+log_root: /net/spaces/jevans/klab/caroyf/logs
+output_root: /net/spaces/jevans/klab/caroyf/outputs
+
+seed: 42
+
+dataset:
+  repo: modelbiome/ai_ecosystem_withmodelcards
+  cols: [id, author, createdAt, tags, pipeline_tag, library_name, downloads, likes]  # 第1阶段核对后调整
+
+replay:
+  t0: "2022-03-02"          # createdAt 回填日期 (5.1)
+  robust_start: "2023-01-01"
+  hub_k: 500                # 枢纽层 K (500-1000)
+  s1: 24                    # 有子层抽样数
+  s0: 24                    # 无子层抽样数
+  uniform_s: 50             # 纯均匀抽样对照
+  recent_windows_days: [7, 30, 90]
+  holdout_frac: 0.10
+
+edges:
+  main_types: [finetune, adapter]
+  unspecified_as: finetune
