@@ -8,4 +8,4 @@
 # usage: sbatch slurm/cpu.sbatch scripts/p4_replay.py [args]
 source ~/miniconda3/etc/profile.d/conda.sh; conda activate hfpa
 source /home/caroyf/myproject/ACMEC/activate.sh
-python "$@"
+if [[ "$1" == *.sh ]]; then bash "$@"; else python "$@"; fi
