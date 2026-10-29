@@ -20,7 +20,8 @@ torch.set_default_dtype(torch.float64)
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def build_panel(birth, choice_t, choice_parent, period, deg_t=None, deg_parent=None, y_weight=None, t0=None):
+def build_panel(birth, choice_t, choice_parent, period, deg_t=None, deg_parent=None, y_weight=None, t0=None,
+                age_unit=1):
     """Dense panel over nodes that receive >= 1 choice (others contribute nothing to either estimator).
 
     birth: node birth times; choice_t / choice_parent: time and parent of each choice;
@@ -42,21 +43,29 @@ def build_panel(birth, choice_t, choice_parent, period, deg_t=None, deg_parent=N
     inset = np.isin(deg_parent, nodes)
     dj = np.array([row[p] for p in deg_parent[inset]])
     dt = ((deg_t[inset] - t0) // period).astype(np.int64)
+    pre = dt < 0  # edges before t0 form the initial degree
     cnt = np.zeros((J, T))
-    np.add.at(cnt, (dj, dt), 1.0)
-    d = np.cumsum(cnt, 1) - cnt  # degree at the start of each period
+    np.add.at(cnt, (dj[~pre], dt[~pre]), 1.0)
+    d0 = np.bincount(dj[pre], minlength=J).astype(float)
+    d = d0[:, None] + np.cumsum(cnt, 1) - cnt  # degree at the start of each period
     b = (birth[nodes] - t0) / period
     start = np.arange(T)[None, :]
     alive = np.clip(start + 1 - b[:, None], 0, 1)  # share of the period the node exists
     active = alive > 0
     logE = np.where(active, np.log(np.where(active, alive, 1)), 0.0)
-    return dict(y=y, d=d, logE=logE, active=active, nodes=nodes, T=T)
+    age = np.maximum(t0 + start * period - birth[nodes][:, None], 0) / age_unit  # age at period start
+    return dict(y=y, d=d, logE=logE, active=active, nodes=nodes, T=T, age=age)
 
 
 def features(P, names=("has_deg", "log_deg")):
-    d = P["d"]
-    f = {"has_deg": (d > 0).astype(float), "log_deg": np.log(np.maximum(d, 1))}
-    return np.stack([f[n] for n in names], -1)
+    """Degree terms are predetermined; age terms are deterministic. With node and period effects only
+    the non-linear part of the age profile is identified (linear age = birth FE + period FE)."""
+    d, age = P["d"], P["age"]
+    f = {"has_deg": lambda: (d > 0).astype(float), "log_deg": lambda: np.log(np.maximum(d, 1)),
+         "log1p_deg": lambda: np.log1p(d), "log_age": lambda: np.log1p(age),
+         "age_lt30": lambda: (age < 30).astype(float), "age_30_90": lambda: ((age >= 30) & (age < 90)).astype(float),
+         "age_90_365": lambda: ((age >= 90) & (age < 365)).astype(float)}
+    return np.stack([f[n]() for n in names], -1)
 
 
 def _t(a):
@@ -144,9 +153,27 @@ def _instruments(P, X):
     return np.stack(base + [b * w for b in base], -1)
 
 
-def qd_gmm2(P, names=("has_deg", "log_deg"), max_iter=300, node_se=True):
+def pd_codes(a):
+    return np.unique(np.asarray(a), return_inverse=True)[1].astype(np.int64)
+
+
+BOUND = 10.0  # |theta| bound for qd_gmm2; estimates near it are flagged as not converged
+
+
+def START_GRID(k):
+    """Starting values for (has_deg, log_deg, ...): 0 and a few plausible PA strengths."""
+    grid = [np.zeros(k)]
+    for a in (0.5, 1.0):
+        s = np.zeros(k)
+        s[min(1, k - 1)] = a
+        grid.append(s)
+    return grid
+
+
+def qd_gmm2(P, names=("has_deg", "log_deg"), max_iter=300, node_se=True, group=None):
     """Over-identified two-step GMM with the quasi-differenced moments (period dummies profiled in
     closed form). Step 1 identity weight, step 2 inverse of the node-clustered moment covariance.
+    group: optional int per panel node (e.g. modality); period effects are then group x period.
     Returns estimates, node-clustered SEs, Hansen J statistic and its degrees of freedom."""
     y, X, logE, act = _t(P["y"]), _t(features(P, names)), _t(P["logE"]), _t(P["active"])
     Z = _t(_instruments(P, features(P, names)))
@@ -155,35 +182,51 @@ def qd_gmm2(P, names=("has_deg", "log_deg"), max_iter=300, node_se=True):
     dE = logE[:, :-1] - logE[:, 1:]
     J = y.shape[0]
     scale = (y0 * pair).sum() / J
+    gi = _t(np.zeros(J, np.int64) if group is None else pd_codes(group))
+    G = int(gi.max()) + 1
 
     def node_moments(th):
-        r = torch.exp((X0 - X1) @ th + dE) * pair
-        num, den = (y0 * pair).sum(0), (y1 * r).sum(0)
-        ratio = torch.where(den > 0, num / den.clamp_min(1e-300), torch.zeros_like(den))
-        g = (y0 - y1 * r * ratio[None, :]) * pair
+        r = torch.exp(((X0 - X1) @ th + dE).clamp(-40, 40)) * pair
+        num = torch.zeros(G, r.shape[1], device=DEV).index_add_(0, gi, y0 * pair)
+        den = torch.zeros(G, r.shape[1], device=DEV).index_add_(0, gi, y1 * r)
+        ratio = torch.where(den > 0, num / den.clamp_min(1e-300), torch.zeros_like(den))[gi]
+        g = (y0 - y1 * r * ratio) * pair
         return (g[..., None] * Z0).sum(1) / scale  # [J, L]
 
-    def solve(W, th0):
-        th = th0.clone().requires_grad_(True)
-        opt = torch.optim.LBFGS([th], lr=1, max_iter=max_iter, tolerance_grad=1e-14, tolerance_change=1e-18,
-                                history_size=20, line_search_fn="strong_wolfe")
+    def objective(th, W):
+        m = node_moments(th).mean(0)
+        return m @ W @ m
 
-        def closure():
-            opt.zero_grad()
-            m = node_moments(th).mean(0)
-            loss = m @ W @ m
-            loss.backward()
-            return loss
+    def solve(W, starts):
+        """Multi-start L-BFGS on theta = BOUND * tanh(v / BOUND); keeps the lowest finite objective."""
+        best, best_f = None, np.inf
+        for th0 in starts:
+            v = (BOUND * torch.atanh((th0 / BOUND).clamp(-0.99, 0.99))).clone().requires_grad_(True)
+            opt = torch.optim.LBFGS([v], lr=1, max_iter=max_iter, tolerance_grad=1e-14, tolerance_change=1e-18,
+                                    history_size=20, line_search_fn="strong_wolfe")
 
-        opt.step(closure)
-        return th.detach()
+            def closure():
+                opt.zero_grad()
+                loss = objective(BOUND * torch.tanh(v / BOUND), W)
+                if torch.isfinite(loss):
+                    loss.backward()
+                return loss
 
-    L = Z.shape[-1]
-    th1 = solve(torch.eye(L, device=DEV), torch.zeros(len(names), device=DEV))
+            opt.step(closure)
+            with torch.no_grad():
+                th = BOUND * torch.tanh(v / BOUND)
+                f = float(objective(th, W))
+            if np.isfinite(f) and f < best_f:
+                best, best_f = th.detach(), f
+        return best
+
+    L, k = Z.shape[-1], len(names)
+    starts = [torch.as_tensor(s, device=DEV, dtype=torch.float64) for s in START_GRID(k)]
+    th1 = solve(torch.eye(L, device=DEV), starts)
     M = node_moments(th1)
     S = (M - M.mean(0)).T @ (M - M.mean(0)) / J
     W = torch.linalg.pinv(S)
-    th2 = solve(W, th1)
+    th2 = solve(W, [th1] + starts)
     M = node_moments(th2)
     m = M.mean(0)
     S = (M - m).T @ (M - m) / J
@@ -194,4 +237,5 @@ def qd_gmm2(P, names=("has_deg", "log_deg"), max_iter=300, node_se=True):
         G = torch.autograd.functional.jacobian(lambda t: node_moments(t).mean(0), th2)  # [L, k]
         V = torch.linalg.pinv(G.T @ torch.linalg.pinv(S) @ G) / J
         se = dict(zip(names, torch.sqrt(torch.diagonal(V).clamp_min(0)).cpu().numpy()))
+    out["converged"] = bool(torch.all(th2.abs() < 0.95 * BOUND))
     return out, se, Jstat, L - len(names)

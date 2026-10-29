@@ -50,10 +50,11 @@ if __name__ == "__main__":
             est1, _ = qd_gmm(P)
             est2, se2, Jst, df = qd_gmm2(P)
             for method, est, se in (("QD_GMM", est1, {}), ("QD_GMM2", est2, se2)):
-                for k in est:
+                for k in (x for x in est if x != "converged"):
                     out.append(dict(scenario=a.scenario, seed=a.seed, n=a.n, period=per, y=v, method=method,
                                     param=k, truth=tv[k], est=float(est[k]), se=float(se.get(k, np.nan)),
-                                    J=Jst if method == "QD_GMM2" else np.nan, J_df=df))
+                                    J=Jst if method == "QD_GMM2" else np.nan, J_df=df,
+                                    converged=est.get("converged", np.nan)))
             print(f"per={per} y={v} J={P['y'].shape[0]} T={P['T']} GMM a={est1['log_deg']:.3f} | GMM2 a={est2['log_deg']:.3f} "
                   f"(se {se2['log_deg']:.3f}) h={est2['has_deg']:.3f} Hansen J={Jst:.1f} df={df} [{time.time() - t:.0f}s]", flush=True)
     d = paths.TABLES / "p0d"
