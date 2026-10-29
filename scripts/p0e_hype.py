@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from hfpa import paths
-from hfpa.models.panel import build_panel, qd_gmm2
+from hfpa.models.panel import build_panel, family_groups, qd_gmm2
 from hfpa.sim.synthetic import generate_mixed
 
 PER_DAY, PERIOD = 20, 10
@@ -28,14 +28,17 @@ SCENARIOS = {
     "mix": dict(alpha=0.5, h=1.0, fitness_sd=1.0),
 }
 AGE_BINS = ("age_lt30", "age_30_90", "age_90_365")
+AGE6 = ("a0_7", "a7_30", "a30_90", "a90_180")
 SPECS = {"no_age": ("has_deg", "log_deg"), "age_bins": ("has_deg", "log_deg") + AGE_BINS,
-         "log_age": ("has_deg", "log_deg", "log_age")}
+         "log_age": ("has_deg", "log_deg", "log_age"),
+         "age6": ("has_deg", "log_deg") + AGE6, "age6_fam": ("has_deg", "log_deg") + AGE6}  # fam: family x period
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", required=True, choices=SCENARIOS)
     ap.add_argument("--seed", type=int, default=paths.CFG["seed"])
     ap.add_argument("--n", type=int, default=150_000)
+    ap.add_argument("--specs", default=",".join(SPECS))
     a = ap.parse_args()
     sc = SCENARIOS[a.scenario]
     nodes, edges, truth = generate_mixed(n=a.n, seed=a.seed, **sc)
@@ -44,9 +47,11 @@ if __name__ == "__main__":
     P = build_panel(birth, ct, edges.parent.to_numpy(), PERIOD)
     tv = {"has_deg": sc["h"], "log_deg": sc["alpha"]}
     out = []
-    for name, feats in SPECS.items():
+    fam = family_groups(P["nodes"], nodes.root.to_numpy(), np.zeros(len(P["nodes"]), np.int64), P["y"].sum(1), top=100)
+    for name in a.specs.split(","):
+        feats = SPECS[name]
         t = time.time()
-        est, se, Jst, df = qd_gmm2(P, names=feats)
+        est, se, Jst, df = qd_gmm2(P, names=feats, group=fam if name.endswith("_fam") else None)
         for k in feats:
             out.append(dict(scenario=a.scenario, seed=a.seed, spec=name, param=k, truth=tv.get(k, np.nan),
                             est=float(est[k]), se=float(se[k]), hansen_J=Jst, J_df=df, converged=est["converged"]))
@@ -54,5 +59,6 @@ if __name__ == "__main__":
               f"conv={est['converged']} [{time.time() - t:.0f}s]", flush=True)
     d = paths.TABLES / "p0e"
     d.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(out).to_csv(d / f"{a.scenario}_s{a.seed}.csv", index=False)
+    tag = "" if a.specs == ",".join(SPECS) else "_" + a.specs.replace(",", "-")
+    pd.DataFrame(out).to_csv(d / f"{a.scenario}_s{a.seed}{tag}.csv", index=False)
     print("done")

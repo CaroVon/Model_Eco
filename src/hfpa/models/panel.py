@@ -14,6 +14,7 @@ x_jt is built from the degree at the start of period t (predetermined: depends o
                  dummies; consistent with predetermined x and fixed T.
 """
 import numpy as np
+import pandas as pd
 import torch
 
 torch.set_default_dtype(torch.float64)
@@ -64,7 +65,11 @@ def features(P, names=("has_deg", "log_deg")):
     f = {"has_deg": lambda: (d > 0).astype(float), "log_deg": lambda: np.log(np.maximum(d, 1)),
          "log1p_deg": lambda: np.log1p(d), "log_age": lambda: np.log1p(age),
          "age_lt30": lambda: (age < 30).astype(float), "age_30_90": lambda: ((age >= 30) & (age < 90)).astype(float),
-         "age_90_365": lambda: ((age >= 90) & (age < 365)).astype(float)}
+         "age_90_365": lambda: ((age >= 90) & (age < 365)).astype(float),
+         # finer bins relative to age >= 180 days (more nodes cross 180 than 365 inside the window)
+         "a0_7": lambda: (age < 7).astype(float), "a7_30": lambda: ((age >= 7) & (age < 30)).astype(float),
+         "a30_90": lambda: ((age >= 30) & (age < 90)).astype(float),
+         "a90_180": lambda: ((age >= 90) & (age < 180)).astype(float)}
     return np.stack([f[n]() for n in names], -1)
 
 
@@ -170,10 +175,12 @@ def START_GRID(k):
     return grid
 
 
-def qd_gmm2(P, names=("has_deg", "log_deg"), max_iter=300, node_se=True, group=None):
+def qd_gmm2(P, names=("has_deg", "log_deg"), max_iter=300, node_se=True, group=None, return_moments=False):
     """Over-identified two-step GMM with the quasi-differenced moments (period dummies profiled in
     closed form). Step 1 identity weight, step 2 inverse of the node-clustered moment covariance.
     group: optional int per panel node (e.g. modality); period effects are then group x period.
+    return_moments: also return per-node moment rows and the weight matrix (out["_M"], out["_W"]) for
+    diagnosing which nodes / families drive the Hansen J statistic.
     Returns estimates, node-clustered SEs, Hansen J statistic and its degrees of freedom."""
     y, X, logE, act = _t(P["y"]), _t(features(P, names)), _t(P["logE"]), _t(P["active"])
     Z = _t(_instruments(P, features(P, names)))
@@ -238,4 +245,15 @@ def qd_gmm2(P, names=("has_deg", "log_deg"), max_iter=300, node_se=True, group=N
         V = torch.linalg.pinv(G.T @ torch.linalg.pinv(S) @ G) / J
         se = dict(zip(names, torch.sqrt(torch.diagonal(V).clamp_min(0)).cpu().numpy()))
     out["converged"] = bool(torch.all(th2.abs() < 0.95 * BOUND))
+    if return_moments:
+        out["_M"], out["_W"] = M.cpu().numpy(), torch.linalg.pinv(S).cpu().numpy()
     return out, se, Jstat, L - len(names)
+
+
+def family_groups(nodes, root, base_group, weight, top=100):
+    """Group per panel node for period effects: own root family for the `top` families with most
+    outcome weight, else base_group (e.g. modality, offset past the family codes)."""
+    fam = root[nodes]
+    w = pd.Series(weight).groupby(fam).sum().sort_values(ascending=False)
+    big = {f: i for i, f in enumerate(w.index[:top])}
+    return np.array([big[f] if f in big else top + int(b) for f, b in zip(fam, base_group)], np.int64)
