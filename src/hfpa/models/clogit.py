@@ -3,6 +3,8 @@
 u_kj = theta' x_kj - log q_kj + phi_{fe(kj)}, with phi_0 = 0 (non-hubs share the baseline).
 Fit by full-batch L-BFGS (gradients accumulated over choice batches); standard errors from
 the analytic Hessian of the conditional logit, H = sum_k w_k (E_p[zz'] - E_p[z]E_p[z]').
+With choice weights or repeated choices by one author, pass `cluster` to fit() for
+cluster-robust (sandwich) SEs of the non-FE coefficients: cov = sum_g (H^-1 s_g)(H^-1 s_g)'.
 """
 import numpy as np
 import torch
@@ -11,8 +13,9 @@ from scipy.stats import chi2
 torch.set_default_dtype(torch.float64)
 
 
-def to_padded(rows, feat_cols, fe_col=None, use_log_q=True, weight=None):
-    """rows: candidate rows sorted by choice_id -> dict of padded arrays [C, S, ...]."""
+def to_padded(rows, feat_cols, fe_col=None, use_log_q=True, weight=None, offset_col=None):
+    """rows: candidate rows sorted by choice_id -> dict of padded arrays [C, S, ...].
+    offset_col: fixed utility term with coefficient 1 (e.g. fixed effects estimated elsewhere)."""
     cid = rows["choice_id"].to_numpy()
     assert np.all(np.diff(cid) >= 0), "rows must be sorted by choice_id"
     _, start, counts = np.unique(cid, return_index=True, return_counts=True)
@@ -24,6 +27,8 @@ def to_padded(rows, feat_cols, fe_col=None, use_log_q=True, weight=None):
     lq = np.zeros((C, S))
     if use_log_q:
         lq[g, pos] = rows["log_q"].to_numpy(np.float64)
+    if offset_col is not None:
+        lq[g, pos] -= rows[offset_col].to_numpy(np.float64)  # utility subtracts lq
     mask = np.zeros((C, S), bool)
     mask[g, pos] = True
     chosen = rows["chosen"].to_numpy() == 1
@@ -60,7 +65,7 @@ class CLogit:
         ll = u.gather(1, b["chosen"][:, None]).squeeze(1) - torch.logsumexp(u, 1)
         return ll
 
-    def fit(self, D, bs=20000, max_iter=500, tol=1e-9):
+    def fit(self, D, bs=20000, max_iter=500, tol=1e-9, cluster=None):
         batches = list(self._batches(D, bs))
         opt = torch.optim.LBFGS([self.p], lr=1, max_iter=max_iter, tolerance_grad=tol, tolerance_change=1e-12,
                                 history_size=50, line_search_fn="strong_wolfe")
@@ -85,10 +90,32 @@ class CLogit:
         cov = torch.linalg.pinv(H)
         se = torch.sqrt(torch.clamp(torch.diagonal(cov), min=0))
         k, n = self.F + self.n_fe, len(D["chosen"])
+        se_cl = np.full(k, np.nan)
+        if cluster is not None:
+            se_cl[: self.F] = self._cluster_se(batches, cov[: self.F], np.asarray(cluster), bs)
         self.result = dict(names=D["names"] + [f"fe{i}" for i in range(1, self.n_fe + 1)],
-                           coef=self.p.detach().cpu().numpy(), se=se.cpu().numpy(), ll=ll, k=k, n=n,
+                           coef=self.p.detach().cpu().numpy(), se=se.cpu().numpy(), se_cl=se_cl, ll=ll, k=k, n=n,
                            aic=2 * k - 2 * ll, bic=k * np.log(n) - 2 * ll)
         return self.result
+
+    @torch.no_grad()
+    def _cluster_se(self, batches, A, cluster, bs):
+        """A = rows of H^-1 for the non-FE coefficients [F, k]; per-choice scores projected by A."""
+        _, cl = np.unique(cluster, return_inverse=True)
+        G = torch.zeros(int(cl.max()) + 1, self.F, device=self.device)
+        for i, b in enumerate(batches):
+            pr = torch.softmax(self.utility(b), 1)
+            X, w = b["X"], b["w"]
+            xc = X.gather(1, b["chosen"][:, None, None].expand(-1, 1, self.F)).squeeze(1)
+            proj = (w[:, None] * (xc - (pr[..., None] * X).sum(1))) @ A[:, : self.F].T
+            if self.n_fe:
+                P = torch.zeros(X.shape[0], self.n_fe + 1, device=self.device).scatter_add_(1, b["fe"], pr)
+                onehot = torch.zeros_like(P).scatter_(1, b["fe"].gather(1, b["chosen"][:, None]), 1.0)
+                proj = proj + (w[:, None] * (onehot - P))[:, 1:] @ A[:, self.F:].T
+            G.index_add_(0, torch.as_tensor(cl[i * bs: i * bs + len(w)], device=self.device), proj)
+        g = G.shape[0]
+        V = G.T @ G * (g / max(g - 1, 1))
+        return torch.sqrt(torch.clamp(torch.diagonal(V), min=0)).cpu().numpy()
 
     def _hessian(self, b):
         pr = torch.softmax(self.utility(b), 1) * b["w"][:, None]  # [C,S], weighted
@@ -128,6 +155,6 @@ def lr_test(ll_small, ll_big, df_diff):
 
 def summary(res, keep=None):
     import pandas as pd
-    df = pd.DataFrame({"coef": res["coef"], "se": res["se"]}, index=res["names"])
+    df = pd.DataFrame({"coef": res["coef"], "se": res["se"], "se_cl": res.get("se_cl")}, index=res["names"])
     df["z"] = df.coef / df.se
     return df if keep is None else df.loc[keep]

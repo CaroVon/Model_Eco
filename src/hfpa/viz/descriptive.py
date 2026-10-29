@@ -118,11 +118,14 @@ def family_growth(nodes, k=20):
 
 
 def head_start(E, nodes, t0, horizon=180, early=30):
-    """Mean children gained in the 6 months after day 30, grouped by children received in the first 30 days."""
+    """Mean children gained in the 6 months after day 30, grouped by children received in the first 30 days.
+    Only models that ever get a child are compared (otherwise the 0 group is ~all of HF); the table is
+    also split by modality."""
     m = E[E.rel_type.isin(MAIN)]
     birth = nodes.birth.to_numpy()
     snap = birth.max()
-    elig = (~nodes.legacy.to_numpy()) & (birth <= snap - (early + horizon) * DAY)
+    ever = np.bincount(m.parent_idx.to_numpy(), minlength=len(birth)) > 0
+    elig = (~nodes.legacy.to_numpy()) & (birth <= snap - (early + horizon) * DAY) & ever
     age = (birth[m.child_idx.to_numpy()] - birth[m.parent_idx.to_numpy()]) / DAY
     par = m.parent_idx.to_numpy()
     keep = elig[par]
@@ -132,17 +135,23 @@ def head_start(E, nodes, t0, horizon=180, early=30):
     days = np.arange(early, early + horizon + 1, 5)
     tab = []
     fig, ax = plt.subplots(figsize=(6.5, 4))
-    for i, (lo, hi, lab) in enumerate(bins):
-        grp = elig & (early_n >= lo) & (early_n <= hi)
-        n = int(grp.sum())
-        sel = grp[par]
-        a = age[sel]
-        mean = [((a >= early) & (a < d)).sum() / n for d in days]
-        ax.plot(days - early, mean, color=SEQ[i])
-        _label_end(ax, days[-1] - early, mean[-1], f"{lab} in first 30d (n={n:,})", SEQ[i])
-        tab += [dict(group=lab, n_parents=n, days_after_day30=d - early, mean_new_children=v) for d, v in zip(days, mean)]
+    mod = nodes.modality.to_numpy()
+    for scope in ["all"] + sorted(pd.unique(mod[elig])):
+        in_scope = elig if scope == "all" else elig & (mod == scope)
+        for i, (lo, hi, lab) in enumerate(bins):
+            grp = in_scope & (early_n >= lo) & (early_n <= hi)
+            n = int(grp.sum())
+            if n == 0:
+                continue
+            a = age[grp[par]]
+            mean = [((a >= early) & (a < d)).sum() / n for d in days]
+            if scope == "all":
+                ax.plot(days - early, mean, color=SEQ[i])
+                _label_end(ax, days[-1] - early, mean[-1], f"{lab} in first 30d (n={n:,})", SEQ[i])
+            tab += [dict(modality=scope, group=lab, n_parents=n, days_after_day30=d - early, mean_new_children=v)
+                    for d, v in zip(days, mean)]
     ax.set(yscale="symlog", xlabel="days after day 30", ylabel="mean new children (cumulative)",
-           title="Head start: early children vs later growth", xlim=(0, horizon * 1.6))
+           title="Head start: early children vs later growth (models with >= 1 child)", xlim=(0, horizon * 1.6))
     _save(fig, "p3_head_start")
     pd.DataFrame(tab).to_csv(paths.TABLES / "p3_head_start.csv", index=False)
 

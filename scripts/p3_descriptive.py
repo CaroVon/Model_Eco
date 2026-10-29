@@ -8,7 +8,7 @@ from hfpa.viz import descriptive as d
 if __name__ == "__main__":
     E = pd.read_parquet(paths.PROCESSED / "edges" / "edges.parquet")
     nodes = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet",
-                            columns=["model_id", "birth", "birth_ts", "legacy", "root"])
+                            columns=["model_id", "birth", "birth_ts", "legacy", "root", "modality"])
     fits = d.degree_ccdf(E)
     print(fits.to_string())
     conc = d.concentration(E, nodes, T0)

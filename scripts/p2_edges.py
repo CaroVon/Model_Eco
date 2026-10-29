@@ -7,6 +7,7 @@ from hfpa.data.build import build_nodes, clean_edges, raw_edges
 if __name__ == "__main__":
     meta = pd.read_parquet(paths.INTERIM / "meta.parquet")
     E, funnel, info = clean_edges(meta, raw_edges(meta))
+    meta = pd.concat([meta.assign(placeholder=False), info["placeholders"]], ignore_index=True)
     nodes, E = build_nodes(meta, E)
     (paths.PROCESSED / "edges").mkdir(parents=True, exist_ok=True)
     (paths.PROCESSED / "nodes").mkdir(parents=True, exist_ok=True)
@@ -19,6 +20,8 @@ if __name__ == "__main__":
     L = ["", "# P2: edges and nodes", "", "## Cleaning funnel", funnel.to_markdown(index=False), "",
          f"- dangling share before removal: {info['dangling_share']:.2%} (< 2% -> removed, plan 5.7); largest:",
          *[f"  - `{p}`: {c:,} child edges" for p, c in info["dangling_top"].items()],
+         f"- placeholder nodes (>= 100 children, kept with flag `placeholder`): "
+         + ", ".join(f"`{r.model_id}` (birth {r.createdAt:%Y-%m-%d}, tag {r.pipeline_tag})" for r in info["placeholders"].itertuples()),
          "", "## Edges after cleaning", E.rel_type.value_counts().to_markdown(), "",
          "## Top-10 parents (main spec: finetune+adapter+unspecified)", top.to_markdown(), "",
          "## Nodes", f"- nodes: {len(nodes):,}; legacy: {nodes.legacy.sum():,}; roots (no parent): {nodes.is_root.sum():,}",

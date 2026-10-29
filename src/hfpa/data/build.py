@@ -10,6 +10,9 @@ from hfpa.data.parse_tags import parse_parents
 
 T0 = pd.Timestamp(paths.CFG["replay"]["t0"] + " 23:29:05", tz="UTC")  # last backfilled timestamp (see audit)
 REL_PRIORITY = ["finetune", "adapter", "unspecified", "merge", "quantized"]  # dedupe + primary-parent order
+# deleted parents with many children are kept as placeholder nodes (plan 5.7); known release dates
+PLACEHOLDER_MIN = 100
+PLACEHOLDER_BIRTH = {"runwayml/stable-diffusion-v1-5": "2022-10-20"}
 PARAM_RE = re.compile(r"(?<![a-z0-9.])(\d+(?:\.\d+)?)(b|m)(?![a-z])", re.I)
 
 
@@ -45,8 +48,12 @@ def clean_edges(meta, E):
     dangling = E.match == "none"
     dangling_share = float(dangling.mean())
     dangling_top = E[dangling].parent.value_counts().head(10)
-    step("drop dangling parents (not in snapshot)", ~dangling.to_numpy())
-    ca = meta.set_index("model_id").createdAt
+    ph = placeholders(meta, E[dangling])
+    keep_ph = dangling & E.parent.isin(ph.model_id)
+    E.loc[keep_ph, "match"] = "placeholder"
+    funnel.append((f"  dangling parents kept as placeholders (>= {PLACEHOLDER_MIN} children)", int(keep_ph.sum()), 0))
+    step("drop dangling parents (not in snapshot)", ~(dangling & ~keep_ph).to_numpy())
+    ca = pd.concat([meta[["model_id", "createdAt"]], ph[["model_id", "createdAt"]]]).set_index("model_id").createdAt
     tc, tp = E.child.map(ca), E.parent.map(ca)
     legacy_pair = (tc <= T0) & (tp <= T0)
     step("drop child created before parent", ~(tc < tp).to_numpy())
@@ -57,8 +64,29 @@ def clean_edges(meta, E):
     # merge children: each parent counts as 1/m of a choice (plan 5.2 spec D)
     m = E[E.rel_type == "merge"].groupby("child").size()
     E["weight"] = np.where(E.rel_type == "merge", 1.0 / E.child.map(m).fillna(1), 1.0)
-    info = dict(dangling_share=dangling_share, dangling_top=dangling_top)
+    info = dict(dangling_share=dangling_share, dangling_top=dangling_top, placeholders=ph)
     return E.drop(columns=["prio"]).reset_index(drop=True), pd.DataFrame(funnel, columns=["step", "kept", "removed"]), info
+
+
+def placeholders(meta, D):
+    """Meta-like rows for dangling parents with >= PLACEHOLDER_MIN children. Birth: known release date,
+    else 1 s before the first child; pipeline_tag / library: most common among the children."""
+    n = D.parent.value_counts()
+    keep = n[n >= PLACEHOLDER_MIN].index
+    m = meta.set_index("model_id")
+    rows = []
+    for p in keep:
+        kids = m.loc[D.child[D.parent == p].unique()]
+        first = kids.createdAt.min()
+        birth = pd.Timestamp(PLACEHOLDER_BIRTH[p], tz="UTC") if p in PLACEHOLDER_BIRTH else first - pd.Timedelta(seconds=1)
+        mode = lambda s: s.mode().iloc[0] if s.notna().any() else None
+        rows.append(dict(model_id=p, author=p.split("/")[0], createdAt=min(birth, first - pd.Timedelta(seconds=1)),
+                         pipeline_tag=mode(kids.pipeline_tag), library_name=mode(kids.library_name),
+                         licenses=[], arxiv_papers=[], tags=[], placeholder=True))
+    empty = meta.iloc[:0].assign(placeholder=pd.Series(dtype=bool))
+    if not rows:
+        return empty
+    return pd.DataFrame(rows, columns=empty.columns).astype({"createdAt": meta.createdAt.dtype})
 
 
 def find_cycle_edges(E):
@@ -94,6 +122,7 @@ def _params_b(model_id):
 def build_nodes(meta, E):
     n = meta[["model_id", "author", "createdAt", "pipeline_tag", "library_name", "licenses", "arxiv_papers",
               "tags", "downloads", "likes", "trendingScore"]].copy()
+    n["placeholder"] = meta["placeholder"].fillna(False).astype(bool).to_numpy() if "placeholder" in meta else False
     n["legacy"] = n.createdAt <= T0
     n["birth_ts"] = n.createdAt.where(~n.legacy, T0)
     n = n.sort_values(["birth_ts", "model_id"], kind="stable").reset_index(drop=True)

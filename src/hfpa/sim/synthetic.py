@@ -35,3 +35,86 @@ def generate(n=50_000, kind="pa", alpha=1.0, beta0=-1.0, fitness_sd=1.0, seed=42
     truth = dict(kind=kind, alpha=alpha if kind == "pa" else 0.0,
                  has_deg=-beta0 if kind == "pa" else 0.0, phi=phi)
     return nodes, edges, truth
+
+
+class _Fenwick:
+    """Prefix sums over node weights: O(log n) update and weighted draw."""
+
+    def __init__(self, n):
+        self.n, self.t, self.top = n, np.zeros(n + 1), 1 << int(np.log2(n))
+
+    def add(self, i, v):
+        i += 1
+        while i <= self.n:
+            self.t[i] += v
+            i += i & -i
+
+    def draw(self, u):
+        """Smallest idx whose prefix sum exceeds u."""
+        pos, step = 0, self.top
+        while step:
+            nxt = pos + step
+            if nxt <= self.n and self.t[nxt] <= u:
+                pos, u = nxt, u - self.t[nxt]
+            step >>= 1
+        return pos
+
+
+def generate_mixed(n=50_000, alpha=0.5, h=1.0, fitness_sd=1.0, decay=0.0,
+                   bulk_frac=0.0, n_bulk=50, repeat_p=0.9, seed=42):
+    """P0b generator mixing the mechanisms the real-data estimator must tell apart.
+
+    Node j's utility for a newcomer at day t:
+        u_j = 1[d_j > 0] (h + alpha log d_j) + phi_j - decay * age_j(days)
+    phi_j ~ N(0, fitness_sd^2) is latent quality. Linear age decay is equivalent to a static
+    per-node shift (+decay * birth_j), so sampling stays O(log n) per step.
+    Bulk uploaders: a share `bulk_frac` of nodes belongs to `n_bulk` authors; an author's first
+    upload chooses by u, later uploads repeat that parent with prob `repeat_p` (habit, not PA).
+    Other nodes are their own author.
+    """
+    rng = np.random.default_rng(seed)
+    phi = rng.normal(0, fitness_sd, n) if fitness_sd > 0 else np.zeros(n)
+    base = phi + decay * np.arange(n)  # log weight at degree 0 (age shift folded in)
+    deg = np.zeros(n, np.int64)
+    w = np.zeros(n)
+    F = _Fenwick(n)
+    bulk = rng.random(n) < bulk_frac
+    author = np.where(bulk, rng.integers(0, n_bulk, n), n_bulk + np.arange(n))
+    fav = {}
+    parent = np.full(n, -1)
+    habit = np.zeros(n, bool)
+
+    def setw(j):
+        lw = base[j] + ((h + alpha * np.log(deg[j])) if deg[j] > 0 else 0.0)
+        nw = np.exp(lw)
+        F.add(j, nw - w[j])
+        w[j] = nw
+
+    setw(0)
+    for i in range(1, n):
+        a = author[i]
+        if a in fav and rng.random() < repeat_p:
+            j, habit[i] = fav[a], True
+        else:
+            j = min(F.draw(rng.random() * _prefix(F, i)), i - 1)  # nodes >= i still have weight 0
+            fav.setdefault(a, j)
+        parent[i] = j
+        deg[j] += 1
+        setw(j)
+        setw(i)
+    root = np.arange(n)
+    for i in range(1, n):
+        root[i] = root[parent[i]]
+    nodes = pd.DataFrame({"birth": np.arange(n, dtype=np.int64) * DAY, "modality": 0, "author": author, "root": root})
+    edges = pd.DataFrame({"child": np.arange(1, n), "parent": parent[1:], "rel_type": "finetune", "weight": 1.0})
+    truth = dict(alpha=alpha, has_deg=h, age_k=-decay * 1000, phi=phi, habit=habit[1:])
+    return nodes, edges, truth
+
+
+def _prefix(F, i):
+    """Sum of weights of nodes [0, i)."""
+    s, k = 0.0, i
+    while k > 0:
+        s += F.t[k]
+        k -= k & -k
+    return s
