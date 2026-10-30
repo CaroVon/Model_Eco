@@ -58,10 +58,16 @@ def hausman(full, restr, names):
                 Vd_posdef=bool(ev.min() > 0), **{f"d_{n}": v for n, v in zip(names, d)})
 
 
-def subsets(rows):
-    """name -> (row mask, parameters that still vary in the subset)."""
+def subsets(rows, dcut=None):
+    """name -> (row mask, parameters that still vary in the subset). dcut: split by degree at the time of the
+    choice (predetermined, unlike the hub stratum, which is chosen by final degree)."""
     st = rows.stratum.to_numpy()
-    out = {"hubs only": (st == HUB, ["log_deg", "log_age", "legacy"]),
+    out = {}
+    if dcut:
+        d = rows.deg.to_numpy()
+        out[f"current degree >= {dcut}"] = (d >= dcut, ["log_deg", "log_age", "legacy"])
+        out[f"current degree < {dcut}"] = (d < dcut, ["has_deg", "log_deg", "log_age", "legacy"])
+    out |= {"hubs only": (st == HUB, ["log_deg", "log_age", "legacy"]),
            "non-hubs only": (st != HUB, ["has_deg", "log_deg", "log_age", "legacy"]),
            "degree > 0 only": (rows.deg.to_numpy() > 0, ["log_deg", "log_age", "legacy"])}
     if "author_reuse" in rows:
@@ -79,10 +85,10 @@ def restrict(rows, mask, min_size=2):
     return r[r.choice_id.isin(n.index[n >= min_size])]
 
 
-def iia_table(rows, ch, base, label):
+def iia_table(rows, ch, base, label, dcut=None):
     out = []
     full = P5.fit(rows, ch, base)
-    for name, (mask, names) in subsets(rows).items():
+    for name, (mask, names) in subsets(rows, dcut).items():
         r = restrict(rows, mask)
         feats = [f for f in base if f in names]
         res = P5.fit(r, ch, feats)
@@ -106,7 +112,7 @@ def part_iia_sim(**_):
         rows["legacy"] = np.float32(0)
         chs = pd.DataFrame({"choice_id": ch.choice_id, "n_pair": 1, "author": ch.choice_id}).set_index("choice_id", drop=False)
         out += iia_table(rows.drop(columns=["author_reuse", "author_family", "same_author"]), chs,
-                         ["has_deg", "log_deg", "log_age"], kind)
+                         ["has_deg", "log_deg", "log_age"], kind, dcut=20)
     for o in out:
         o.pop("d_legacy", None)
     P5.write(pd.DataFrame(out), "p9_iia_sim", "IIA (Hausman-McFadden) test on synthetic networks")
@@ -114,7 +120,7 @@ def part_iia_sim(**_):
 
 def part_iia(rows, ch, **_):
     tr, _ = P5.split(rows, ch)
-    P5.write(pd.DataFrame(iia_table(tr, ch, P5.M["M3"], "HF, M3, gamma = 0.5")), "p9_iia",
+    P5.write(pd.DataFrame(iia_table(tr, ch, P5.M["M3"], "HF, M3, gamma = 0.5", dcut=100)), "p9_iia",
              "IIA (Hausman-McFadden) test, real data: full candidate sets vs subsets of alternatives")
 
 
@@ -344,6 +350,60 @@ def part_mixture2(rows, ch, gamma=0.0, fe=False, **_):
     P5.write(pd.DataFrame([row]), f"p9_mixture2_{tag}", f"Latent-class logit, generative version ({tag})")
 
 
+# ---------------------------------------------------------------- uniform vs stratified sampling
+def part_sampling(rows, ch, nodes, **_):
+    """Why does uniform negative sampling give a higher alpha (1.21 vs 0.93)? Uniform sets contain almost only
+    low-degree candidates, so a log-linear degree term is fitted on the steep low-degree part of a concave
+    curve. Check: (1) synthetic networks where log-linear is right (pure PA) or wrong (fitness; concave
+    degree effect via a saturating utility), stratified vs uniform; (2) real data, degree-bin model under
+    both samplers: if the bins agree, the gap is functional form, not the sampler."""
+    import glob
+    from hfpa.replay.replay import Replay
+    from hfpa.sim.synthetic import generate
+    out = []
+    for kind, kw in [("pure PA (alpha = 1)", dict(kind="pa", alpha=1.0)), ("pure fitness (alpha = 0)", dict(kind="fitness"))]:
+        nodes_s, edges_s, _ = generate(n=50_000, seed=42, **kw)
+        for samp in ("stratified", "uniform"):
+            chs_, r = Replay(nodes_s, edges_s, {"hub_k": 200, "s1": 24, "s0": 24, "s": 50, "sampling": samp, "seed": 42}).run()
+            r["log_age"] = np.log1p(r.age_days).astype(np.float32)
+            chs = pd.DataFrame({"choice_id": chs_.choice_id, "n_pair": 1, "author": chs_.choice_id}).set_index("choice_id", drop=False)
+            res = P5.fit(r, chs, ["has_deg", "log_deg", "log_age"])
+            i = res["names"].index("log_deg")
+            out.append(dict(data=kind, sampler=samp, model="log-linear", param="log_deg", coef=res["coef"][i], se_cl=res["se_cl"][i],
+                            share_cands_deg_ge10=float((r.deg >= 10).mean())))
+    # real data
+    tr, _ = P5.split(rows, ch)
+    d = paths.PROCESSED / "choices" / "main_unif"
+    parts = []
+    for f in sorted(glob.glob(str(d / "rows" / "*.parquet"))):
+        x = pd.read_parquet(f, columns=["choice_id", "cand_id", "chosen", "log_q", "deg", "log_deg", "has_deg", "age_days"])
+        parts.append(x[x.choice_id % 10 == 0])
+    u = pd.concat(parts, ignore_index=True)
+    u["log_age"] = np.log1p(u.age_days).astype(np.float32)
+    u["legacy"] = nodes.legacy.to_numpy()[u.cand_id].astype(np.float32)
+    chu = pd.read_parquet(d / "choices.parquet").set_index("choice_id", drop=False)
+    chu["author"] = nodes.author_code.to_numpy()[chu.child]
+    chu["n_pair"] = chu.groupby(["author", "parent"]).choice_id.transform("size")
+    u = u[u.choice_id.isin(chu.index[~chu.holdout])]
+    for samp, r, c in (("stratified", tr, ch), ("uniform", u, chu)):
+        res = P5.fit(r, c, P5.M["M3"])
+        i = res["names"].index("log_deg")
+        out.append(dict(data="HF", sampler=samp, model="log-linear", param="log_deg", coef=res["coef"][i], se_cl=res["se_cl"][i],
+                        share_cands_deg_ge10=float((r.deg >= 10).mean())))
+        names, med = P5.deg_bins(r)
+        res = P5.fit(r, c, [f for f in P5.M["M3"] if f != "log_deg"] + names)
+        for nm, md in zip(names, med):
+            j = res["names"].index(nm)
+            out.append(dict(data="HF", sampler=samp, model="degree bins", param=nm, median_deg=md, coef=res["coef"][j], se_cl=res["se_cl"][j]))
+        # log-linear fitted only where uniform sets have support (degree < 33)
+        rr = restrict(r, r.deg.to_numpy() < 33)
+        res = P5.fit(rr, c, P5.M["M3"])
+        i = res["names"].index("log_deg")
+        out.append(dict(data="HF", sampler=samp, model="log-linear, degree < 33 only", param="log_deg", coef=res["coef"][i], se_cl=res["se_cl"][i]))
+        print(out[-1], flush=True)
+    P5.write(pd.DataFrame(out), "p9_sampling", "Uniform vs stratified negative sampling: alpha and degree-bin coefficients")
+
+
 # ---------------------------------------------------------------- two-hop
 def part_twohop(rows, ch, final_deg, **_):
     nn = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["birth", "author_code"])
@@ -397,7 +457,7 @@ def part_twohop(rows, ch, final_deg, **_):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", required=True, choices=["iia_sim", "iia", "mixture", "mixture2", "twohop"])
+    ap.add_argument("--part", required=True, choices=["iia_sim", "iia", "mixture", "mixture2", "twohop", "sampling"])
     ap.add_argument("--gamma", type=float, default=0.0)
     ap.add_argument("--fe", action="store_true")
     a = ap.parse_args()

@@ -20,6 +20,15 @@ Scenarios: base (fitted mixture), alpha0 (pop log_deg = 0), norecent (lrec30 = 0
 (has_deg = log_deg = lrec30 = 0 in pop: degree and recent heat have no effect), noquality (hub FE removed),
 pop_only (no reuse / self / template mode), m3 (single-class M3 logit with alpha = 0.93, no other modes).
 
+Fitness spec (--spec fitness, estimated by --fit_fitness): the popularity mode has no degree or heat
+feedback; instead each node has a fixed quality q_j and all nodes share an age profile g(age):
+u_j = q_j + g(age_j) [+ alpha * log(1 + deg_j) in the counterfactuals fit_a0.25 / fit_a0.5 / fit_a1].
+q and g are the MLE of that logit (no degree term) on first author-parent choices without self-choices,
+by modality, fitted by alternating updates (the denominator is a convolution over birth days). Nodes
+never chosen get q = -inf. The other modes (reuse, self, template) and their weights come from g0_fe.
+This asks: given the qualities and release dates, does the system reproduce concentration and turnover,
+and how much more concentrated would HF be with preferential attachment of strength alpha?
+
 Static decomposition (--static): no feedback through simulated state. For every sampled real choice
 (10% sample, real state at the time of the choice), the probability each mode puts on the top-10 and
 top-500 nodes by final degree (importance-sampling estimate over the sampled candidate set), averaged
@@ -57,7 +66,69 @@ def load_params(spec):
     return P
 
 
+AGE_EDGES = np.array([0, 1, 3, 7, 14, 30, 60, 90, 180, 365, 730, 100000])
+
+
+def fit_fitness(n_iter=60):
+    n, pre, ch = load_data()
+    birth, mod, author = n.birth.to_numpy(np.int64), n.modality_code.to_numpy(np.int64), n.author_code.to_numpy()
+    c = ch.sort_values("t", kind="stable")
+    first = ~pd.Series(list(zip(author[c.child], c.parent))).duplicated().to_numpy()
+    noself = author[c.child.to_numpy()] != author[c.parent.to_numpy()]
+    c = c[first & noself]
+    d0 = int(birth.min() // DAY)
+    T = int(birth.max() // DAY) - d0 + 1
+    q = np.full(len(n), -np.inf)
+    G = np.zeros(len(AGE_EDGES) - 1)
+    lag = np.arange(T)
+    abin = np.clip(np.searchsorted(AGE_EDGES, lag - 0.5, "right") - 1, 0, len(G) - 1)  # same rule as the simulator
+    for m in np.unique(c.modality):
+        cm = c[c.modality == m]
+        nt = np.bincount(cm.t.to_numpy() // DAY - d0, minlength=T).astype(float)  # choices per day
+        y = pd.Series(1, index=cm.parent.to_numpy()).groupby(level=0).size()
+        J = y.index.to_numpy()
+        bJ = birth[J] // DAY - d0
+        yJ = y.to_numpy(float)
+        tday = cm.t.to_numpy() // DAY - d0
+        pb = birth[cm.parent.to_numpy()] // DAY - d0
+        lg = tday - pb
+        obs_bin = np.bincount(abin[lg[lg >= 1]], minlength=len(G)).astype(float)
+        g = np.zeros(len(G))
+        qJ = np.log(yJ)
+        for it in range(n_iter):
+            eg = np.exp(g[abin]) * (lag >= 1)  # by lag; only nodes born before the choice day
+            S = np.bincount(bJ, np.exp(qJ), T)  # quality mass by birth day
+            # Z_t = sum_b S_b eg[t - b] for b < t (alive strictly before the choice day)
+            Z = np.convolve(S, eg)[:T]
+            ratio = np.divide(nt, Z, out=np.zeros(T), where=Z > 0)
+            H = np.correlate(ratio, eg, "full")[T - 1:]  # H_b = sum_t ratio_t eg[t - b]
+            qJ = np.log(yJ) - np.log(np.maximum(H[bJ], 1e-300))
+            S = np.bincount(bJ, np.exp(qJ), T)
+            exp_bin = np.zeros(len(G))
+            for k in range(len(G)):  # expected choices at each age bin
+                ek = (abin == k) * eg
+                exp_bin[k] = (ratio * np.convolve(S, ek)[:T]).sum()
+            g = g + np.log(np.maximum(obs_bin, 1e-9) / np.maximum(exp_bin, 1e-300))
+            g -= g[-1]
+        q[J] = qJ
+        G_m = g
+        print(m, len(J), "age profile", np.round(G_m, 2), flush=True)
+        np.save(OUT / f"fitness_g_{m}.npy", G_m)
+    OUT.mkdir(exist_ok=True)
+    np.save(OUT / "fitness_q.npy", q)
+
+
 def scenario(spec, name):
+    if spec == "fitness":
+        P = load_params("g0_fe")
+        P["fitness"] = dict(q=np.load(OUT / "fitness_q.npy"),
+                            g={int(f.stem.split("_")[-1]): np.load(f) for f in OUT.glob("fitness_g_*.npy")},
+                            alpha=float(name.split("_a")[1]) if name.startswith("fit_a") else 0.0)
+        P["fe"] = None
+        if name == "pop_only":
+            pi = P["pi"]
+            P["pi"] = np.array([pi[0], pi[1], 0, 0, 0]) / (pi[0] + pi[1])
+        return P
     P = load_params(spec)
     pop, pi = P["pop"], P["pi"]
     if name == "alpha0":
@@ -95,6 +166,7 @@ class Sim:
     def __init__(self, n, pre, ch, P, seed):
         self.rng = np.random.default_rng(seed)
         self.pop, self.reuse_b, self.self_b, self.pi = P["pop"], P["reuse"], P["self"], P["pi"]
+        self.fit = P.get("fitness")
         self.birth = n.birth.to_numpy(np.int64)
         self.mod = n.modality_code.to_numpy(np.int64)
         self.author = n.author_code.to_numpy(np.int64)
@@ -155,6 +227,20 @@ class Sim:
                 self.alive_ptr[m] = k
 
     def _pop_dist(self, m, day):
+        if self.fit is not None:
+            F = self.fit
+            if not hasattr(self, "_fpool"):
+                q = F["q"]
+                self._fpool = [x[np.isfinite(q[x])] for x in self.mod_nodes]
+            J = self._fpool[m]
+            J = J[self.bday[J] < day]
+            if len(J) == 0:
+                return None
+            age = day - self.bday[J]
+            g = F["g"].get(m, np.zeros(len(AGE_EDGES) - 1))
+            ab = np.clip(np.searchsorted(AGE_EDGES, age - 0.5, "right") - 1, 0, len(g) - 1)
+            u = F["q"][J] + g[ab] + F["alpha"] * np.log1p(self.deg[J])
+            return J, np.cumsum(np.exp(u - u.max())), np.zeros(0)
         b = self.pop
         P = np.asarray(self.pos[m], np.int64)
         age = (day * DAY - self.birth[P]) / DAY
@@ -225,9 +311,11 @@ class Sim:
                 avail = np.array([True, True, len(reuse) > 0, len(own) > 0, lp is not None and self.mod[lp] == m])
                 w = np.where(avail, self.pi, 0)
                 k = int(self.rng.choice(5, p=w / w.sum()))
+                if k == 0 and m not in dists:
+                    dists[m] = self._pop_dist(m, day)
+                if k == 0 and dists[m] is None:  # no node of this modality was ever chosen yet: uniform
+                    k = 1
                 if k == 0:
-                    if m not in dists:
-                        dists[m] = self._pop_dist(m, day)
                     p = self._draw_pop(m, dists[m])
                 elif k == 1:
                     p = int(self.mod_nodes[m][self.rng.integers(int(np.searchsorted(self.mod_bday[m], day, "left")))])
@@ -269,7 +357,7 @@ def gini(x):
     return float((2 * np.arange(1, n + 1) - n - 1) @ x / (n * x.sum())) if n and x.sum() > 0 else np.nan
 
 
-def metrics(parent, parent_deg, reused, child, author, root, deg0, t):
+def metrics(parent, parent_deg, reused, child, author, root, deg0, t, birth=None):
     cnt = np.bincount(parent, minlength=len(deg0))
     final = deg0 + cnt
     top = np.sort(cnt)[::-1]
@@ -281,6 +369,11 @@ def metrics(parent, parent_deg, reused, child, author, root, deg0, t):
                gini_final_deg=gini(final[final > 0]), n_parents=int((cnt > 0).sum()),
                share_new_parent=float((parent_deg == 0).mean()), share_reuse=float(reused.mean()),
                share_self=float((author[parent] == author[child]).mean()), max_final_deg=int(final.max()))
+    if birth is not None:
+        out["share_parent_age_lt180d"] = float(((t - birth[parent]) < 180 * 86400).mean())
+        mon_ = pd.to_datetime(t, unit="s").to_period("M")
+        top1 = pd.DataFrame({"m": mon_, "p": parent}).groupby(["m", "p"]).size().groupby(level=0).idxmax()
+        out["n_distinct_monthly_top1"] = int(len({x[1] for x in top1}))
     # monthly top-10 family share
     mon = pd.to_datetime(t, unit="s").to_period("M")
     df = pd.DataFrame({"m": mon, "f": root[parent]})
@@ -310,14 +403,14 @@ def collect():
     child, t = ch.child.to_numpy(), ch.t.to_numpy()
     rows, series, finals = [], {}, {}
     rm, rs, rf, rc = metrics(ch.parent.to_numpy(), ch.parent_deg.to_numpy(), real_reuse(child, ch.parent.to_numpy(), author),
-                             child, author, root, deg0, t)
+                             child, author, root, deg0, t, n.birth.to_numpy())
     rows.append(dict(scenario="real", seed=-1, **rm))
     series["real"], finals["real"] = rs, rf
     real_top = set(np.argsort(-rc)[:10])
     for f in sorted(glob.glob(str(OUT / "*.npz"))):
         z = np.load(f)
         sc, seed = f'{z["spec"]}/{z["scenario"]}', int(z["seed"])
-        m, s, fin, cnt = metrics(z["parent"], z["parent_deg"], z["reused"], child, author, root, deg0, t)
+        m, s, fin, cnt = metrics(z["parent"], z["parent_deg"], z["reused"], child, author, root, deg0, t, n.birth.to_numpy())
         m["real_top10_recovered"] = len(real_top & set(np.argsort(-cnt)[:10]))
         m.update({f"mode_{k}": float((z["mode"] == i).mean()) for i, k in enumerate(MODES)})
         rows.append(dict(scenario=sc, seed=seed, **m))
@@ -326,9 +419,11 @@ def collect():
     df = pd.DataFrame(rows)
     df.to_csv(paths.TABLES / "p11_generative.csv", index=False)
     sc_order = ["base", "noquality", "alpha0", "norecent", "nofeedback", "pop_only", "m3"]
-    order = ["real"] + [f"{sp}/{x}" for sp in ("g0_fe", "g0_nofe", "g0.5_fe", "g0.5_nofe") for x in sc_order]
+    order = (["real"] + [f"fitness/{x}" for x in ("fit_a0", "fit_a0.25", "fit_a0.5", "fit_a1", "pop_only")]
+             + [f"{sp}/{x}" for sp in ("g0_fe", "g0_nofe", "g0.5_fe", "g0.5_nofe") for x in sc_order])
     cols = ["top1_share", "top10_share", "top100_share", "fam_top10_share", "gini_final_deg", "n_parents",
-            "share_new_parent", "share_reuse", "share_self", "max_final_deg", "real_top10_recovered"]
+            "share_new_parent", "share_reuse", "share_self", "max_final_deg", "real_top10_recovered",
+            "share_parent_age_lt180d", "n_distinct_monthly_top1"]
     s = df.groupby("scenario")[cols].agg(["mean", "std"])
     mean = s.xs("mean", axis=1, level=1).reindex([o for o in order if o in s.index])
     sd = s.xs("std", axis=1, level=1).reindex(mean.index)
@@ -339,9 +434,8 @@ def collect():
     (paths.TABLES / "p11_generative.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
 
-    lab = {"real": "real network", "g0_fe/base": "fitted mixture (hub FE)", "g0_fe/noquality": "no hub FE (quality)",
-           "g0_fe/alpha0": "α = 0", "g0_fe/nofeedback": "no degree / heat feedback", "g0_fe/pop_only": "no personal modes",
-           "g0_nofe/base": "fitted mixture, no FE in fit"}
+    lab = {"real": "real network", "fitness/fit_a0": "quality + lifecycle, α = 0", "fitness/fit_a0.5": "same, α = 0.5",
+           "fitness/fit_a1": "same, α = 1", "fitness/pop_only": "α = 0, no personal modes", "g0_fe/base": "feedback logit (hub FE)"}
     fig, ax = plt.subplots(1, 2, figsize=(11, 4.2))
     for i, k in enumerate([o for o in lab if o in series]):
         st = dict(color="#222222", lw=2.4) if k == "real" else dict(color=SERIES[(i - 1) % len(SERIES)], lw=1.6)
@@ -443,12 +537,15 @@ if __name__ == "__main__":
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--collect", action="store_true")
     ap.add_argument("--static", action="store_true")
+    ap.add_argument("--fit_fitness", action="store_true")
     ap.add_argument("--limit", type=int, default=0, help="only the first N choices (smoke test)")
     a = ap.parse_args()
     if a.collect:
         collect()
     elif a.static:
         static()
+    elif a.fit_fitness:
+        fit_fitness()
     else:
         n, pre, ch = load_data()
         if a.limit:

@@ -12,6 +12,9 @@ Outcomes: all children, and first author-parent choices without self-choices (ha
 
 Validation first: Polya-urn pairs with known a (0, 0.5, 1) through the same estimator.
 
+Pair samples: name (same repo name + declared base, from the name screen), hash (weight files identical,
+p12_hash_pairs.py), union. The name sample is also split by its hash check.
+
 usage: python scripts/p12_mirror_pairs.py
 Writes results/tables/p12_mirror_pairs.csv (pairs), p12_mirror_panel.csv, p12_mirror.md, figure p12_mirror_share.
 """
@@ -57,7 +60,7 @@ def simulate(alpha, n_pairs=44, months=(3, 10), seed=0):
     return pd.DataFrame(rows)
 
 
-def build():
+def build(sample="name"):
     n = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["model_id", "birth", "author_code"])
     E = pd.read_parquet(paths.PROCESSED / "edges" / "edges.parquet", columns=["child_idx", "parent_idx", "rel_type"])
     idx = pd.Series(np.arange(len(n)), index=n.model_id)
@@ -70,6 +73,22 @@ def build():
     P = pd.DataFrame({"orig": o, "cpy": c}).drop_duplicates()
     declared = set(zip(E.child_idx, E.parent_idx))  # copy declares the original as base (any relation type)
     P = P[[(x, y) in declared for x, y in zip(P.cpy, P.orig)]].reset_index(drop=True)
+    hp = paths.TABLES / "p12_hash_pairs.csv"
+    if hp.exists():
+        H = pd.read_csv(hp)
+        hm = dict(zip(zip(H.parent_idx, H.child_idx), H.match))
+        P["hash_match"] = [hm.get((x, y), "not_checked") for x, y in zip(P.orig, P.cpy)]
+        Hi = H[H.match == "identical"]
+        Q = pd.DataFrame({"orig": np.where(birth[Hi.parent_idx] <= birth[Hi.child_idx], Hi.parent_idx, Hi.child_idx),
+                          "cpy": np.where(birth[Hi.parent_idx] <= birth[Hi.child_idx], Hi.child_idx, Hi.parent_idx)})
+        Q["hash_match"] = "identical"
+        if sample == "hash":
+            P = Q
+        elif sample == "union":
+            P = pd.concat([P[P.hash_match != "different"], Q]).drop_duplicates(["orig", "cpy"])
+        elif sample == "name_not_different":
+            P = P[P.hash_match != "different"]
+        P = P.reset_index(drop=True)
 
     m = E[E.rel_type.isin(MAIN)].copy()
     author = n.author_code.to_numpy()
@@ -114,21 +133,27 @@ if __name__ == "__main__":
             out.append(dict(data=f"simulated, true a = {alpha}", seed=seed, a=est["dlogdeg"][0], a_se=est["dlogdeg"][1],
                             n_obs=nobs, n_pairs=npairs))
     sim = pd.DataFrame(out).groupby("data").agg(a=("a", "mean"), a_sd=("a", "std"), a_se=("a_se", "mean")).reset_index()
-    P, panels = build()
-    P.to_csv(paths.TABLES / "p12_mirror_pairs.csv", index=False)
     res = []
-    for variant, pn in panels.items():
-        pn.assign(variant=variant).to_csv(paths.TABLES / f"p12_mirror_panel_{variant}.csv", index=False)
-        for label, sub in [("all months", pn), ("first 12 months", pn[pn.month < 12]),
-                           ("pairs with gap <= 30 days", pn[pn.pair.isin(P.index[P.gap_days <= 30])])]:
-            est, nobs, npairs = fit(sub)
-            res.append(dict(outcome=variant, sample=label, a=est["dlogdeg"][0], a_se=est["dlogdeg"][1],
-                            b_age=est["dlogage"][0], b_age_se=est["dlogage"][1], n_pair_months=nobs, n_pairs=npairs))
+    for sample in ("name", "name_not_different", "hash", "union"):
+        P_, panels_ = build(sample)
+        if sample == "name":
+            P, panels = P_, panels_
+            P.to_csv(paths.TABLES / "p12_mirror_pairs.csv", index=False)
+        for variant, pn in panels_.items():
+            if sample == "name":
+                pn.assign(variant=variant).to_csv(paths.TABLES / f"p12_mirror_panel_{variant}.csv", index=False)
+            for label, sub in [("all pairs", pn), ("gap <= 30 days", pn[pn.pair.isin(P_.index[P_.gap_days <= 30])])]:
+                est, nobs, npairs = fit(sub)
+                res.append(dict(pairs=sample, outcome=variant, subsample=label, a=est["dlogdeg"][0], a_se=est["dlogdeg"][1],
+                                b_age=est["dlogage"][0], b_age_se=est["dlogage"][1], n_pair_months=nobs, n_pairs=npairs))
+                print(res[-1], flush=True)
     res = pd.DataFrame(res)
     res.to_csv(paths.TABLES / "p12_mirror.csv", index=False)
-    cols = ["orig_id", "copy_id", "gap_days", "orig_deg_at_copy", "children_orig_after", "children_copy", "copy_share_after"]
+    cols = ["orig_id", "copy_id", "hash_match", "gap_days", "orig_deg_at_copy", "children_orig_after", "children_copy", "copy_share_after"]
     md = ["# P12 mirror pairs: identical weights, different name / degree", "",
-          f"{len(P)} pairs (copy declares the original as base model; same repo name; both in the snapshot).", "",
+          f"Name sample: {len(P)} pairs (copy declares the original as base model; same repo name; both in the snapshot). "
+          "name_not_different: name pairs whose weight hashes are not different; hash: weight files identical "
+          "(p12_hash_pairs.py); union: name_not_different + hash.", "",
           "## Estimator check on simulated pairs (mean of 20 seeds; sd of estimates in a_sd)", "", sim.to_markdown(index=False, floatfmt=".3f"), "",
           "## Real pairs: pair-FE binomial logit of the copy's share of new children on the log degree ratio", "",
           res.to_markdown(index=False, floatfmt=".3f"), "",
