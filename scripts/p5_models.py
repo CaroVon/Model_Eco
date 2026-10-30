@@ -190,10 +190,13 @@ def deg_bins(rows):
 
 
 def part_p6(rows, ch, **_):
+    """Degree-bin coefficients relative to degree 1, as in Overgoor et al. (2020) fig. 5: degree 0 is
+    shown as a separate point (= -has_deg), with exact linear PA (alpha = 1) as a dotted reference."""
     tr, _ = split(rows, ch)
     names, med = deg_bins(tr)
     out = []
-    fig, ax = plt.subplots(figsize=(7, 4.2))
+    x0 = -1.0  # plotting position of degree 0
+    fig, ax = plt.subplots(figsize=(7, 4.4))
     for i, (base, fe) in enumerate([("M3", None), ("M5", "fe")]):
         feats = [f for f in M[base] if f != "log_deg"] + names
         res = fit(tr, ch, feats, fe)
@@ -201,6 +204,8 @@ def part_p6(rows, ch, **_):
         a = slope["coef"][slope["names"].index("log_deg")]
         idx = [res["names"].index(n) for n in names]
         coef, se = res["coef"][idx], res["se_cl"][idx]
+        ih = res["names"].index("has_deg")
+        z0, z0se = -res["coef"][ih], res["se_cl"][ih]
         x = np.log(med)
         ok = np.isfinite(coef) & np.isfinite(x)
         col = SERIES[i]
@@ -208,15 +213,22 @@ def part_p6(rows, ch, **_):
                         color=col, alpha=0.15, lw=0)
         ax.plot(np.r_[0, x[ok]], np.r_[0, coef[ok]], color=col, lw=2, marker="o", ms=5, mec=SURFACE, mew=1.5,
                 label=f"{base}: degree bins")
-        ax.plot([0, x[ok].max()], [0, a * x[ok].max()], color=col, lw=1, ls="--", label=f"{base}: linear, α = {a:.2f}")
+        ax.plot([0, x[ok].max()], [0, a * x[ok].max()], color=col, lw=1, ls="--", label=f"{base}: log-degree fit, α = {a:.2f}")
+        ax.errorbar([x0 + 0.08 * i], [z0], yerr=[1.96 * z0se], fmt="s", ms=6, color=col, mec=SURFACE, mew=1.5, capsize=3)
+        out.append(dict(model=base, bin="deg_0", median_deg=0, coef=z0, se_cl=z0se, alpha_linear=a))
         for n, m_, c_, s_ in zip(names, med, coef, se):
             out.append(dict(model=base, bin=n, median_deg=m_, coef=c_, se_cl=s_, alpha_linear=a))
-    ax.set(xlabel="log(median degree in bin); baseline degree 1", ylabel="utility relative to degree 1",
+    xm = np.log(max(m_ for m_ in med if np.isfinite(m_)))
+    ax.plot([0, xm], [0, xm], color=MUTED, lw=1, ls=":", label="exact linear PA (α = 1)")
+    ticks = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000]
+    ax.set_xticks([x0] + [np.log(t) for t in ticks], ["0"] + [str(t) for t in ticks])
+    ax.axvline(x0 / 2, color=GRID, lw=1)
+    ax.set(xlabel="degree at the time of the choice (log scale; 0 shown separately)", ylabel="utility relative to degree 1",
            title="P6: non-parametric degree effect (conditional association)")
-    ax.legend(frameon=False, fontsize=8)
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
     ax.grid(color=GRID, lw=0.6)
     _save(fig, "p6_degree_bins")
-    write(pd.DataFrame(out), "p6_degree_bins", "P6 degree-bin coefficients (M3 and M5 bases)")
+    write(pd.DataFrame(out), "p6_degree_bins", "P6 degree-bin coefficients (M3 and M5 bases; deg_0 = -has_deg)")
 
 
 def part_p7(rows, ch, final_deg, **_):

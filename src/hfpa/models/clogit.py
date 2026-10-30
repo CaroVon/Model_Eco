@@ -91,10 +91,12 @@ class CLogit:
         se = torch.sqrt(torch.clamp(torch.diagonal(cov), min=0))
         k, n = self.F + self.n_fe, len(D["chosen"])
         se_cl = np.full(k, np.nan)
+        cov_cl = None
         if cluster is not None:
-            se_cl[: self.F] = self._cluster_se(batches, cov[: self.F], np.asarray(cluster), bs)
+            cov_cl = self._cluster_se(batches, cov[: self.F], np.asarray(cluster), bs)
+            se_cl[: self.F] = np.sqrt(np.clip(np.diag(cov_cl), 0, None))
         self.result = dict(names=D["names"] + [f"fe{i}" for i in range(1, self.n_fe + 1)],
-                           coef=self.p.detach().cpu().numpy(), se=se.cpu().numpy(), se_cl=se_cl, ll=ll, k=k, n=n,
+                           coef=self.p.detach().cpu().numpy(), se=se.cpu().numpy(), se_cl=se_cl, cov_cl=cov_cl, ll=ll, k=k, n=n,
                            aic=2 * k - 2 * ll, bic=k * np.log(n) - 2 * ll)
         return self.result
 
@@ -115,7 +117,7 @@ class CLogit:
             G.index_add_(0, torch.as_tensor(cl[i * bs: i * bs + len(w)], device=self.device), proj)
         g = G.shape[0]
         V = G.T @ G * (g / max(g - 1, 1))
-        return torch.sqrt(torch.clamp(torch.diagonal(V), min=0)).cpu().numpy()
+        return V.cpu().numpy()  # cluster-robust covariance of the non-FE coefficients
 
     def _hessian(self, b):
         pr = torch.softmax(self.utility(b), 1) * b["w"][:, None]  # [C,S], weighted
@@ -135,15 +137,17 @@ class CLogit:
 
     @torch.no_grad()
     def evaluate(self, D, bs=20000, topk=(1, 10)):
-        """Mean log-likelihood and top-k hit rate (rank of chosen among candidates, by u without -log q)."""
+        """Mean log-likelihood and top-k hit rate (rank of chosen among candidates, by u without -log q;
+        tied utilities are broken at random)."""
         lls, hits = [], {k: [] for k in topk}
         for b in self._batches(D, bs):
             lls.append(self._ll_batch(b).cpu().numpy())
             u = self.utility({**b, "lq": torch.zeros_like(b["lq"])})
             uc = u.gather(1, b["chosen"][:, None])
-            rank = (u > uc).sum(1).cpu().numpy()
-            for k in topk:
-                hits[k].append(rank < k)
+            greater = (u > uc).sum(1).cpu().numpy()
+            ties = ((u == uc) & b["mask"]).sum(1).cpu().numpy()  # includes the chosen alternative
+            for k in topk:  # expected hit rate when ties are broken at random
+                hits[k].append(np.clip((k - greater) / ties, 0, 1))
         return dict(mean_ll=float(np.concatenate(lls).mean()),
                     **{f"top{k}": float(np.concatenate(v).mean()) for k, v in hits.items()})
 
