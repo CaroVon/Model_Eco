@@ -1,0 +1,11 @@
+step,kept,removed
+parsed base_model tags,582598,0
+"dedupe (child, parent) pairs",582001,597
+  parent matched exactly,573840,0
+  parent matched case-insensitively,25,0
+drop self loops,580736,1265
+  dangling parents kept as placeholders (>= 100 children),3582,0
+drop dangling parents (not in snapshot),576182,4554
+drop child created before parent,574531,1651
+drop equal timestamps (non-legacy),574531,0
+drop edges on cycles,574531,0
