@@ -405,7 +405,9 @@ def part_sampling(rows, ch, nodes, **_):
 
 
 # ---------------------------------------------------------------- two-hop
-def part_twohop(rows, ch, final_deg, **_):
+def twohop(rows, ch, final_deg):
+    """Distinct other authors who share a niche (non-hub) parent with the chooser's author and used candidate j
+    (edges strictly before the month of the choice), per row."""
     nn = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["birth", "author_code"])
     E = pd.read_parquet(paths.PROCESSED / "edges" / "edges.parquet", columns=["child_idx", "parent_idx", "rel_type"])
     m = E[E.rel_type.isin(MAIN)]
@@ -440,6 +442,11 @@ def part_twohop(rows, ch, final_deg, **_):
             ii = sel[rows_author[sel] == a]
             co[ii] = v[rows.cand_id.to_numpy()[ii]]
         print(mon, flush=True)
+    return co
+
+
+def part_twohop(rows, ch, final_deg, **_):
+    co = twohop(rows, ch, final_deg)
     rows["lco2"] = np.log1p(co).astype(np.float32)
     rows["is_co2"] = (co > 0).astype(np.float32)
     tr, ho = P5.split(rows, ch)
