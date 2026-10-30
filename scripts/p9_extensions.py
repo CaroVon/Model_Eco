@@ -138,12 +138,13 @@ def last_parent(ch, nodes, E):
 class Mode:
     """One latent class: a conditional logit on its own candidate set (or a point mass / uniform)."""
 
-    def __init__(self, name, rows, feats, cid):
+    def __init__(self, name, rows, feats, cid, fe_col=None):
         self.name, self.feats, self.cid = name, feats, cid
+        self.n_fe = int(rows[fe_col].max()) if (rows is not None and fe_col) else 0
         self.model, self.D, self.idx = None, None, None
         if rows is None:
             return
-        D = to_padded(rows, feats if feats else ["chosen"], weight=None)
+        D = to_padded(rows, feats if feats else ["chosen"], fe_col=fe_col if self.n_fe else None, weight=None)
         if not feats:  # uniform: no parameters
             D["X"] = np.zeros(D["X"].shape[:2] + (0,))
         self.D = D
@@ -151,7 +152,10 @@ class Mode:
         self.idx = np.searchsorted(cid, ids)  # position of each of this mode's choices among all choices
         self.lq_ch = D["lq"][np.arange(len(D["chosen"])), D["chosen"]]
         if feats:
-            self.model = CLogit(len(feats))
+            self.model = self._new()
+
+    def _new(self):
+        return CLogit(len(self.feats), n_fe=self.n_fe, l2_fe=1e-4 if self.n_fe else 0.0)
 
     def logp(self, n):
         """Full-set log probability of the chosen alternative for all n choices (-inf if not in the set)."""
@@ -175,7 +179,7 @@ class Mode:
             return
         self.D["w"] = w[self.idx]
         prev = self.model.p.detach().clone()
-        self.model = CLogit(len(self.feats))
+        self.model = self._new()
         with torch.no_grad():
             self.model.p.copy_(prev)
         self.res = self.model.fit(self.D, max_iter=50)
@@ -277,6 +281,69 @@ def part_mixture(rows, ch, nodes, **_):
     P5.write(pd.DataFrame(rows_), "p9_mixture_responsibilities", "Mean responsibility of each mode (4-mode model), by chooser group")
 
 
+# ---------------------------------------------------------------- mixture, generative version
+REUSE = ["log_deg", "lrec30"]
+SELF = ["log_age"]
+MODES2 = ["pop", "unif", "reuse", "self", "template"]
+
+
+def build_modes2(rows, ch, cid, fe):
+    lp = ch.last_parent.loc[cid].to_numpy()
+    chosen = rows.loc[rows.chosen == 1].set_index("choice_id").cand_id.loc[cid].to_numpy()
+    hit = np.where(np.isfinite(lp) & (lp == chosen), 0.0, -np.inf)
+    t = Mode("template", None, [], cid)
+    t.logp = lambda n, hit=hit: hit
+    return [Mode("pop", rows, POP, cid, fe_col="fe" if fe else None), Mode("unif", rows, [], cid),
+            Mode("reuse", restrict(rows, rows.author_reuse.to_numpy() > 0, min_size=1), REUSE, cid),
+            Mode("self", restrict(rows, rows.same_author.to_numpy() > 0, min_size=1), SELF, cid), t]
+
+
+def part_mixture2(rows, ch, gamma=0.0, fe=False, **_):
+    """Modes with separate sets for reused parents and own models (so the size of an author's own set does
+    not scale the self-choice probability), optional hub FE in the popularity mode. Saves parameters for
+    scripts/p11_generative.py."""
+    E = pd.read_parquet(paths.PROCESSED / "edges" / "edges.parquet", columns=["child_idx", "parent_idx", "rel_type"])
+    nn = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["birth", "author_code"])
+    ch["last_parent"] = last_parent(ch.reset_index(drop=True), nn, E)
+    tr, ho = P5.split(rows, ch)
+    cid = np.unique(tr.choice_id.to_numpy())
+    w = ch.n_pair.loc[cid].to_numpy(float) ** -gamma
+    best = None
+    for seed in (0, 1):
+        modes = build_modes2(tr, ch, cid, fe)
+        for m in modes:
+            m.mstep(np.ones(len(cid)))
+        r = em(modes, w, len(cid), seed=seed, n_iter=40)
+        print(seed, r["pi"].round(3), round(r["ll"], 1), r["iters"], flush=True)
+        if best is None or r["ll"] > best[0]["ll"]:
+            best = (r, modes)
+    r, modes = best
+    hcid = np.unique(ho.choice_id.to_numpy())
+    hm = build_modes2(ho, ch, hcid, fe)
+    for a_, b_ in zip(hm, modes):
+        if b_.model is not None:
+            a_.model = b_.model
+    Lh = np.stack([m.logp(len(hcid)) for m in hm], 1) + np.log(r["pi"])[None, :]
+    tag = f"g{gamma:g}_{'fe' if fe else 'nofe'}"
+    row = dict(spec=tag, gamma=gamma, hub_fe=fe, ll=r["ll"], holdout_mean_ll=float(np.logaddexp.reduce(Lh, 1).mean()),
+               em_iters=r["iters"], **{f"pi_{k}": p for k, p in zip(MODES2, r["pi"])})
+    save = dict(pi=r["pi"])
+    for m in modes:
+        if m.model is None:
+            continue
+        for f, c, s_ in zip(m.feats, m.res["coef"], m.res["se"]):
+            row[f"{m.name}:{f}"], row[f"{m.name}:{f}_se"] = c, s_
+        save[f"{m.name}_coef"] = np.asarray(m.res["coef"][: len(m.feats)])
+        save[f"{m.name}_feats"] = np.array(m.feats)
+        if m.n_fe:
+            save["pop_fe"] = np.asarray(m.model.p.detach().cpu().numpy()[len(m.feats):])
+            pairs = rows.loc[rows.fe > 0, ["fe", "cand_id"]].drop_duplicates("fe").sort_values("fe")
+            save["pop_fe_node"] = pairs.cand_id.to_numpy()
+            assert np.array_equal(pairs.fe.to_numpy(), np.arange(1, m.n_fe + 1))
+    np.savez(paths.TABLES / f"p9_mixture2_{tag}.npz", **save)
+    P5.write(pd.DataFrame([row]), f"p9_mixture2_{tag}", f"Latent-class logit, generative version ({tag})")
+
+
 # ---------------------------------------------------------------- two-hop
 def part_twohop(rows, ch, final_deg, **_):
     nn = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["birth", "author_code"])
@@ -330,11 +397,13 @@ def part_twohop(rows, ch, final_deg, **_):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", required=True, choices=["iia_sim", "iia", "mixture", "twohop"])
+    ap.add_argument("--part", required=True, choices=["iia_sim", "iia", "mixture", "mixture2", "twohop"])
+    ap.add_argument("--gamma", type=float, default=0.0)
+    ap.add_argument("--fe", action="store_true")
     a = ap.parse_args()
     if a.part == "iia_sim":
         part_iia_sim()
     else:
         rows, ch, final_deg, nodes = P5.load()
-        globals()[f"part_{a.part}"](rows=rows, ch=ch, final_deg=final_deg, nodes=nodes)
+        globals()[f"part_{a.part}"](rows=rows, ch=ch, final_deg=final_deg, nodes=nodes, gamma=a.gamma, fe=a.fe)
     print("done")
