@@ -45,6 +45,9 @@ if __name__ == "__main__":
     for c in M.columns:
         rows[c] = M[c].to_numpy(np.float32)
     P15.add_features(rows, ch, final_deg, nodes)
+    T = pd.read_parquet(paths.PROCESSED / "choices" / "main_strat" / "text_chosen.parquet").set_index("choice_id")
+    for c in ("txt_sim", "txt_na", "txt_has"):
+        rows[c] = T[c].reindex(rows.choice_id).to_numpy(np.float32)
     print(f"features in {time.time() - t0:.0f}s", flush=True)
 
     # 3. indices, outcomes, calibration
@@ -57,11 +60,12 @@ if __name__ == "__main__":
     A["author"] = nn.author_code.to_numpy()[kid]
     A["parent"] = ch.parent.to_numpy()
     A["child"] = kid
-    A["hist_has"], A["ds_has"] = rows.hist_has.to_numpy(), rows.ds_has.to_numpy()
+    for c in P15.SIGNAL:
+        A[c] = rows[c].to_numpy()
     A.to_parquet(paths.PROCESSED / "choices" / "main_strat" / "p16_calib_full.parquet")
     cal = calibrate(A)
     # subsample with a demand signal (the match index is 0 by construction elsewhere)
-    sig = calibrate(A[(A.hist_has > 0) | (A.ds_has > 0)], outcomes=("y_children180", "y_likes"))
+    sig = calibrate(A[(A[P15.SIGNAL] > 0).any(axis=1)], outcomes=("y_children180", "y_likes"))
     cal = pd.concat([cal.assign(sample="all plan A"), sig.assign(sample="with demand signal")], ignore_index=True)
     P5.write(cal, "p16_calib_full", "P16 calibration on all plan-A first choices (chosen parent's utility indices; SE clustered by parent)")
 

@@ -1,0 +1,21 @@
+sample,feature,choices_with_signal_hist,choices_with_signal_ds,mean_chosen,mean_other
+all choices,hist_has,0.8357033,0.09613155,0.67786586,0.8639353
+all choices,size_dist,0.8357033,0.09613155,0.42678824,0.55441797
+all choices,size_na,0.8357033,0.09613155,0.5297764,0.5540713
+all choices,task_hist,0.8357033,0.09613155,0.6224299,0.60166186
+all choices,lang_hist,0.8357033,0.09613155,0.4299302,0.50371075
+all choices,ds_has,0.8357033,0.09613155,0.09613155,0.08226341
+all choices,ds_lang,0.8357033,0.09613155,0.027351236,0.021457877
+all choices,ds_task,0.8357033,0.09613155,0.055270318,0.03594651
+all choices,ds_couse,0.8357033,0.09613155,0.14180279,0.0050699105
+all choices,org_noncomm,0.8357033,0.09613155,0.0,1.2389506e-05
+first author-parent choices,hist_has,0.4803892,0.15276946,0.4803892,0.5472321
+first author-parent choices,size_dist,0.4803892,0.15276946,0.23784493,0.32062867
+first author-parent choices,size_na,0.4803892,0.15276946,0.73907185,0.7263995
+first author-parent choices,task_hist,0.4803892,0.15276946,0.39176646,0.36520323
+first author-parent choices,lang_hist,0.4803892,0.15276946,0.29348803,0.31727153
+first author-parent choices,ds_has,0.4803892,0.15276946,0.15276946,0.1327181
+first author-parent choices,ds_lang,0.4803892,0.15276946,0.04206587,0.038854454
+first author-parent choices,ds_task,0.4803892,0.15276946,0.08413174,0.05654679
+first author-parent choices,ds_couse,0.4803892,0.15276946,0.2791945,0.0075509488
+first author-parent choices,org_noncomm,0.4803892,0.15276946,0.0,2.5593528e-05

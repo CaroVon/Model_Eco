@@ -60,12 +60,13 @@ GROUPS = {
     "pop": ["log_deg", "lrec30", "major_org"],
     "base": ["has_deg", "legacy", "log_age"],
     "qual": ["bench_z", "bench_na"],
-    "match": ["size_dist", "size_na", "task_hist", "lang_hist", "ds_lang", "ds_task"],
+    "match": ["size_dist", "size_na", "task_hist", "lang_hist", "ds_lang", "ds_task", "txt_sim", "txt_na"],
     "inertia": ["author_reuse", "author_family", "same_author", "is_last"],
     "local": ["lco2", "ds_couse"],
     "avail": ["lquant"] + LIB,
 }
 ALL = sum(GROUPS.values(), [])
+SIGNAL = ["hist_has", "ds_has", "txt_has"]  # choice has a demand signal: author history, dataset profile, own card text
 NAMES = {"pop": "popularity", "base": "visibility / life cycle", "qual": "general quality", "match": "demand match", "inertia": "inertia",
          "local": "local search", "avail": "availability"}
 PARTITIONS = {  # coarser classifications built from the same 2^7 fits
@@ -123,6 +124,11 @@ def add_features(rows, ch, final_deg, nodes):
 def load():
     d = paths.PROCESSED / "choices" / SPEC
     rows = pd.read_parquet(d / "p15_rows.parquet")
+    T = pd.read_parquet(d / "text.parquet")  # P18 card-text similarity, row-aligned
+    assert np.array_equal(T.choice_id.to_numpy(), rows.choice_id.to_numpy())
+    assert np.array_equal(T.cand_id.to_numpy(), rows.cand_id.to_numpy())
+    for c in ("txt_sim", "txt_na", "txt_has"):
+        rows[c] = T[c].to_numpy(np.float32)
     ch = pd.read_parquet(d / "choices.parquet").set_index("choice_id", drop=False)
     nodes = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["author_code", "major_org"])
     full = pd.read_parquet(paths.PROCESSED / "choices" / "main_strat" / "choices.parquet", columns=["child", "parent"])
@@ -288,7 +294,7 @@ def part_classify(rows, ch):
                    inertia_pos=c.inertia > 1e-9, fit_gap=gdf.match.max() - c.match, pop_gap=gdf["pop"].max() - c["pop"])
         out.append(rec)
     C = pd.DataFrame(out).set_index("choice_id")
-    sig = rows.groupby("choice_id")[["hist_has", "ds_has"]].max().max(1).reindex(C.index) > 0
+    sig = rows.groupby("choice_id")[SIGNAL].max().max(1).reindex(C.index) > 0
     C["signal"] = sig.to_numpy() & C.match_var.to_numpy()
     lab = np.select([~C.signal, C.fit_best & C.pop_best, C.fit_best, C.pop_best],
                     ["no demand signal", "both", "fit-type", "popularity-type"], "neither")
@@ -314,7 +320,7 @@ def mode_feats(avail):
 def mode_rows(rows, draw=False):
     """Candidate rows of each mode. For estimation a choice enters a restricted mode only if its chosen
     alternative is in the mode's set; for drawing (draw=True) every non-empty set is available."""
-    sig = rows.groupby("choice_id")[["hist_has", "ds_has"]].transform("max").max(1).to_numpy() > 0
+    sig = rows.groupby("choice_id")[SIGNAL].transform("max").max(1).to_numpy() > 0
     sub = (lambda m: rows[m]) if draw else (lambda m: P9.restrict(rows, m, min_size=1))
     return {"pop": rows, "qual": rows, "unif": rows, "match": rows[sig],
             "reuse": sub(rows.author_reuse.to_numpy() > 0), "self": sub(rows.same_author.to_numpy() > 0),
