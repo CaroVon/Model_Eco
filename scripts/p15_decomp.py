@@ -88,6 +88,25 @@ def build():
     assert np.array_equal(M.cand_id.to_numpy(), rows.cand_id.to_numpy())
     for c in M.columns[2:]:
         rows[c] = M[c].to_numpy(np.float32)
+    add_features(rows, ch, final_deg, nodes)
+    keep = ["choice_id", "cand_id", "chosen", "log_q", "stratum", "fe", "hist_has", "ds_has"] + ALL
+    rows[keep].to_parquet(d / "p15_rows.parquet", index=False)
+    ch["first"] = first_flag(ch, nodes)
+    ch[["first"]].to_parquet(d / "p15_first.parquet")
+    print(rows[keep].describe().T.to_string())
+
+
+def first_flag(ch, nodes):
+    """Plan A: is the choice the first of its author-parent pair (over all main choices)?"""
+    full = pd.read_parquet(paths.PROCESSED / "choices" / "main_strat" / "choices.parquet", columns=["child", "parent", "t"])
+    a = nodes.author_code.to_numpy()
+    full = full.assign(a=a[full.child]).sort_values("t", kind="stable")
+    fp = set(map(tuple, full.loc[~full.duplicated(["a", "parent"]), ["child", "parent"]].to_numpy()))
+    return [(c, p) in fp for c, p in zip(ch.child, ch.parent)]
+
+
+def add_features(rows, ch, final_deg, nodes):
+    """Quality (bench), last-parent and two-hop features on P5 rows that already carry the match columns."""
     B = pd.read_parquet(paths.PROCESSED / "nodes" / "bench.parquet")
     bz = np.full(len(nodes), np.nan, np.float32)
     bz[B.node.to_numpy()] = B.bench_z.to_numpy()
@@ -99,16 +118,6 @@ def build():
     lp = pd.Series(P9.last_parent(ch.reset_index(drop=True), nn, E), index=ch.index)
     rows["is_last"] = (lp.loc[rows.choice_id].to_numpy() == rows.cand_id.to_numpy()).astype(np.float32)
     rows["lco2"] = np.log1p(P9.twohop(rows, ch, final_deg)).astype(np.float32)
-    keep = ["choice_id", "cand_id", "chosen", "log_q", "stratum", "fe", "hist_has", "ds_has"] + ALL
-    rows[keep].to_parquet(d / "p15_rows.parquet", index=False)
-    # plan A flag: first choice of the author-parent pair, from all main choices
-    full = pd.read_parquet(paths.PROCESSED / "choices" / "main_strat" / "choices.parquet", columns=["child", "parent", "t"])
-    a = nodes.author_code.to_numpy()
-    full = full.assign(a=a[full.child]).sort_values("t", kind="stable")
-    fp = set(map(tuple, full.loc[~full.duplicated(["a", "parent"]), ["child", "parent"]].to_numpy()))
-    ch["first"] = [(c, p) in fp for c, p in zip(ch.child, ch.parent)]
-    ch[["first"]].to_parquet(d / "p15_first.parquet")
-    print(rows[keep].describe().T.to_string())
 
 
 def load():

@@ -55,10 +55,12 @@ RELEASES = [("Llama 2", "2023-07-18"), ("Llama 3", "2024-04-18"), ("FLUX.1", "20
 
 
 # ---------------------------------------------------------------- data
-def load(spec="main_strat_frac0.1"):
+def load(spec="main_strat_frac0.1", filters=None):
+    """filters: optional pyarrow row filter, e.g. [("chosen", "==", 1)] to read only the chosen rows."""
     d = paths.PROCESSED / "choices" / spec
     ch = pd.read_parquet(d / "choices.parquet")
-    rows = pd.concat([pd.read_parquet(f) for f in sorted(glob.glob(str(d / "rows" / "*.parquet")))], ignore_index=True)
+    rows = pd.concat([pd.read_parquet(f, filters=filters) for f in sorted(glob.glob(str(d / "rows" / "*.parquet")))],
+                     ignore_index=True)
     assert np.all(np.diff(rows.choice_id.to_numpy()) >= 0)
     nodes = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet",
                             columns=["birth", "author_code", "legacy", "major_org", "has_arxiv", "params_b",

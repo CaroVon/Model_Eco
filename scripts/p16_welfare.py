@@ -52,6 +52,38 @@ def regress(df, y, xs, fes, cluster):
     return r, len(d)
 
 
+XS = ["x_match", "x_pop", "x_base", "x_qual", "x_inertia", "x_local", "x_avail"]
+
+
+def add_outcomes(A, kid, t, nodes):
+    """Outcomes of the child models kid (row-aligned with A) and the month of the choice."""
+    birth = nodes.birth.to_numpy()
+    E = pd.read_parquet(paths.PROCESSED / "edges" / "edges.parquet", columns=["child_idx", "parent_idx", "rel_type"])
+    m = E[E.rel_type.isin(P5.MAIN)]
+    tmax = birth.max()
+    lag = birth[m.child_idx.to_numpy()] - birth[m.parent_idx.to_numpy()]
+    early = m[(lag >= 0) & (lag < WIN)].parent_idx.value_counts()
+    A["y_children180"] = np.where(birth[kid] <= tmax - WIN, np.log1p(early.reindex(kid).fillna(0).to_numpy()), np.nan)
+    A["y_likes"] = np.log1p(nodes.likes.to_numpy(float)[kid])
+    B = pd.read_parquet(paths.PROCESSED / "nodes" / "bench.parquet")
+    A["y_bench"] = B.set_index("node").bench_z.reindex(kid).to_numpy()
+    A["month"] = (t // (30 * 86400)).astype(int)
+
+
+def calibrate(A, outcomes=("y_children180", "y_likes", "y_bench")):
+    cal = []
+    for y in outcomes:
+        for fes in (["month", "modality"], ["month", "modality", "author"]):
+            try:
+                rr, n = regress(A, y, XS, fes, "parent")
+            except Exception as e:  # noqa: BLE001  (too few observations for y_bench with author FE)
+                print(y, fes, e)
+                continue
+            for x in XS:
+                cal.append(dict(outcome=y, fe="+".join(fes), x=x, coef=rr.params[x], se=rr.bse[x], n=n))
+    return pd.DataFrame(cal)
+
+
 if __name__ == "__main__":
     rows, ch = P15.load()
     r, g = P15.sample(rows, ch, "planA")
@@ -104,35 +136,14 @@ if __name__ == "__main__":
              "P16 welfare (utility units): logsum vs random choice, realised utility advantage of the chosen parent by mechanism, fit loss")
 
     # 2. calibration: child's later success on the chosen parent's indices
-    birth = nodes.birth.to_numpy()
-    E = pd.read_parquet(paths.PROCESSED / "edges" / "edges.parquet", columns=["child_idx", "parent_idx", "rel_type"])
-    m = E[E.rel_type.isin(P5.MAIN)]
-    tmax = birth.max()
     kid = ch.child.loc[A.index].to_numpy()
-    lag = birth[m.child_idx.to_numpy()] - birth[m.parent_idx.to_numpy()]
-    early = m[(lag >= 0) & (lag < WIN)].parent_idx.value_counts()
-    A["y_children180"] = np.where(birth[kid] <= tmax - WIN, np.log1p(early.reindex(kid).fillna(0).to_numpy()), np.nan)
-    A["y_likes"] = np.log1p(nodes.likes.to_numpy(float)[kid])
-    B = pd.read_parquet(paths.PROCESSED / "nodes" / "bench.parquet")
-    A["y_bench"] = B.set_index("node").bench_z.reindex(kid).to_numpy()
-    A["month"] = (ch.t.loc[A.index].to_numpy() // (30 * 86400)).astype(int)
+    add_outcomes(A, kid, ch.t.loc[A.index].to_numpy(), nodes)
     A["author"] = au
     A["parent"] = ch.parent.loc[A.index].to_numpy()
     # indices of the chosen parent (levels, not advantages)
     for k in groups:
         A[f"x_{k}"] = chosen.loc[A.index, f"u_{k}"].to_numpy()
-    xs = ["x_match", "x_pop", "x_base", "x_qual", "x_inertia", "x_local", "x_avail"]
-    cal = []
-    for y in ("y_children180", "y_likes", "y_bench"):
-        for fes in (["month", "modality"], ["month", "modality", "author"]):
-            try:
-                rr, n = regress(A, y, xs, fes, "parent")
-            except Exception as e:  # noqa: BLE001  (too few observations for y_bench with author FE)
-                print(y, fes, e)
-                continue
-            for x in xs:
-                cal.append(dict(outcome=y, fe="+".join(fes), x=x, coef=rr.params[x], se=rr.bse[x], n=n))
-    cal = pd.DataFrame(cal)
+    cal = calibrate(A)
     P5.write(cal, "p16_welfare_calibration", "P16 child success on the chosen parent's utility indices (per utility unit; SE clustered by parent)")
     # fit loss in outcome units, under both calibrations (user decision: report both; with author FE the match
     # effect is about zero, so the without-FE number is an upper bound)

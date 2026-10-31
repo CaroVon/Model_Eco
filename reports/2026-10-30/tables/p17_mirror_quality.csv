@@ -1,0 +1,29 @@
+quantity,value
+pairs with both repos among the hubs,15.0
+hubs with FE SE < 1.0 (of 500),447.0
+var(phi) over these hubs,1.6235577109939232
+mean FE sampling variance,0.14069949025118608
+publisher of the copies: unsloth; hubs from it,102.0
+mean copy - original phi,1.905513038742147
+"corr(phi_a, phi_b)",0.6054774349055183
+s raw (no noise correction),0.08148178406055877
+s non-quality share of var(phi),0.007102312961755465
+s 95% bootstrap lo,-0.05988321914330434
+s 95% bootstrap hi,0.06934585053785776
+s_sys publisher premium share,0.4312493376600213
+s_total = s_sys + s,0.4383516506217768
+s_total 95% lo,0.32545798635787165
+s_total 95% hi,0.5431866489776399
+hub-FE part of quality share,0.31161578536715806
+adjusted upper bound (s_total): fit,0.2001797758180668
+adjusted upper bound (s_total): popularity,0.4109936055025315
+adjusted upper bound (s_total): ratio,0.4870629935307687
+adjusted upper bound (s_total): ratio_if_availability,0.7295279394649961
+adjusted upper bound (s_total lo): fit,0.23535922367063988
+adjusted upper bound (s_total lo): popularity,0.3758141576499584
+adjusted upper bound (s_total lo): ratio,0.6262649207852852
+adjusted upper bound (s_total lo): ratio_if_availability,0.857734647652785
+adjusted upper bound (s_total hi): fit,0.1675115354714398
+adjusted upper bound (s_total hi): popularity,0.44366184584915846
+adjusted upper bound (s_total hi): ratio,0.37756579033932164
+adjusted upper bound (s_total hi): ratio_if_availability,0.6104729851439257
