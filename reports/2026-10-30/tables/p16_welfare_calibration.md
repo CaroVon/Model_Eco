@@ -1,0 +1,46 @@
+# P16 child success on the chosen parent's utility indices (per utility unit; SE clustered by parent)
+
+| outcome       | fe                    | x         |       coef |          se |     n |
+|:--------------|:----------------------|:----------|-----------:|------------:|------:|
+| y_children180 | month+modality        | x_match   |  0.01476   |   0.003321  |  7746 |
+| y_children180 | month+modality        | x_pop     | -0.008043  |   0.001928  |  7746 |
+| y_children180 | month+modality        | x_base    |  0.008584  |   0.00275   |  7746 |
+| y_children180 | month+modality        | x_qual    | -0.02745   |   0.2756    |  7746 |
+| y_children180 | month+modality        | x_inertia |  0.02686   |   0.003651  |  7746 |
+| y_children180 | month+modality        | x_local   | -2.271e-05 |   0.001336  |  7746 |
+| y_children180 | month+modality        | x_avail   |  0.04185   |   0.01759   |  7746 |
+| y_children180 | month+modality+author | x_match   | -0.005404  |   0.007315  |  7746 |
+| y_children180 | month+modality+author | x_pop     |  0.009182  |   0.004405  |  7746 |
+| y_children180 | month+modality+author | x_base    | -0.006337  |   0.005992  |  7746 |
+| y_children180 | month+modality+author | x_qual    |  0.2925    |   0.1944    |  7746 |
+| y_children180 | month+modality+author | x_inertia | -0.01773   |   0.006083  |  7746 |
+| y_children180 | month+modality+author | x_local   | -0.01127   |   0.007278  |  7746 |
+| y_children180 | month+modality+author | x_avail   |  0.01509   |   0.02618   |  7746 |
+| y_likes       | month+modality        | x_match   |  0.03277   |   0.004917  | 13341 |
+| y_likes       | month+modality        | x_pop     | -0.03827   |   0.004586  | 13341 |
+| y_likes       | month+modality        | x_base    |  0.02504   |   0.006303  | 13341 |
+| y_likes       | month+modality        | x_qual    | -0.4785    |   0.4578    | 13341 |
+| y_likes       | month+modality        | x_inertia |  0.02054   |   0.005597  | 13341 |
+| y_likes       | month+modality        | x_local   | -0.006997  |   0.003336  | 13341 |
+| y_likes       | month+modality        | x_avail   |  0.2176    |   0.03454   | 13341 |
+| y_likes       | month+modality+author | x_match   |  0.006268  |   0.007678  | 13341 |
+| y_likes       | month+modality+author | x_pop     | -0.007844  |   0.005301  | 13341 |
+| y_likes       | month+modality+author | x_base    |  0.01333   |   0.007156  | 13341 |
+| y_likes       | month+modality+author | x_qual    |  0.1239    |   0.2142    | 13341 |
+| y_likes       | month+modality+author | x_inertia |  0.006596  |   0.006385  | 13341 |
+| y_likes       | month+modality+author | x_local   |  0.009696  |   0.006726  | 13341 |
+| y_likes       | month+modality+author | x_avail   |  0.0157    |   0.03872   | 13341 |
+| y_bench       | month+modality        | x_match   | -0.001448  |   0.05076   |    37 |
+| y_bench       | month+modality        | x_pop     | -0.2099    |   0.1004    |    37 |
+| y_bench       | month+modality        | x_base    | -0.1646    |   0.07528   |    37 |
+| y_bench       | month+modality        | x_qual    |  1.405     |   2.208     |    37 |
+| y_bench       | month+modality        | x_inertia | -0.1477    |   0.04369   |    37 |
+| y_bench       | month+modality        | x_local   | -0.006853  |   0.09587   |    37 |
+| y_bench       | month+modality        | x_avail   |  0.7525    |   1.247     |    37 |
+| y_bench       | month+modality+author | x_match   |  0.02088   | nan         |    37 |
+| y_bench       | month+modality+author | x_pop     | -0.07951   | nan         |    37 |
+| y_bench       | month+modality+author | x_base    |  0.005404  | nan         |    37 |
+| y_bench       | month+modality+author | x_qual    | -0.000749  | nan         |    37 |
+| y_bench       | month+modality+author | x_inertia |  0.03649   | nan         |    37 |
+| y_bench       | month+modality+author | x_local   |  0.0522    | nan         |    37 |
+| y_bench       | month+modality+author | x_avail   | -0.003654  |   4.167e-06 |    37 |
