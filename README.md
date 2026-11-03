@@ -63,6 +63,18 @@
 - **Slurm:** 模板为 `slurm/{cpu,gpu}.sbatch`,执行 .sh 脚本,不用 `--wrap`;general 分区上限 12 小时。
 - **其他:** 路径检查用 `python -m hfpa.paths`;随机种子见 `configs/config.yaml`。
 
+### 借用的外部资源(只读)
+用户于 2026-10-31 同意:P22 临时借用 ICML 项目的环境和本地模型。只读使用,不修改 ICML 的任何文件,也不往 `qc-vllm` 里安装任何包。
+
+| 资源 | 路径 | 用途 |
+|---|---|---|
+| conda 环境 `qc-vllm`(vllm 0.32、transformers 5.19) | `/net/spaces/jevans/klab/caroyf/conda/envs/qc-vllm` | P22 的嵌入计算和 LLM 标注,通过 `slurm/gpu_vllm.sbatch` 运行 |
+| Qwen2.5-14B-Instruct(主标注)、Llama-3.1-8B-Instruct(第二标注员) | `/net/spaces/jevans/klab/caroyf/data/ICML/models/hf/` | P22 的两两适合度标注 |
+
+- 每个借用任务的日志开头都会打印一行 `[borrowed] ...` / `NOTE: borrowing ...`。
+- 嵌入模型 `intfloat/multilingual-e5-base` 是 ACMEC 自己下载的(`external/models/`),不属于借用。
+- 外部质量数据只用于稳健性检验,放在 `external/quality/`:Open LLM Leaderboard v2(`open-llm-leaderboard/contents`)和 LMArena(`lmarena-ai/leaderboard-dataset`,text/full),均于 2026-10-31 下载。
+
 ## 数据
 
 | 项目 | 数值 |

@@ -8,6 +8,7 @@
            excluded; candidate documents: own paragraphs minus the frequent ones. Name tokens (orgs, families of
            models with >= NAME_MIN_DEG children; every name token of the N_HUBS largest parents; size / variant words)
            and tokens with digits removed on both sides. TF-IDF cosine.
+           Also saves the TF-IDF matrix and node -> row maps (interim/text_tfidf.npz, text_rows.npz).
            Writes processed/choices/<spec>/text.parquet (aligned with p15_rows.parquet),
            processed/choices/main_strat/text_chosen.parquet (child-chosen parent, all main choices) and
            results/tables/p18_text.md (coverage, chosen vs other similarity).
@@ -21,6 +22,7 @@ from collections import Counter
 
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 
 from hfpa import paths
 from hfpa.data.load_meta import CSV
@@ -56,8 +58,10 @@ def extract(chunksize=50_000):
     pd.DataFrame(out, columns=["node", "paras"]).drop_duplicates("node").to_parquet(paths.INTERIM / "cards_clean.parquet", index=False)
 
 
-def build():
-    t0 = time.time()
+def kept_paragraphs(t0=None):
+    """Paragraphs kept after the template rules, and the name vocabulary.
+    Returns nodes frame, child_nodes, cand_nodes, kept paragraphs (child docs then candidate docs), names."""
+    t0 = t0 or time.time()
     nodes = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["model_id", "birth"])
     birth = nodes.birth.to_numpy()
     C = pd.read_parquet(paths.INTERIM / "cards_clean.parquet")
@@ -98,9 +102,16 @@ def build():
 
     child_nodes = np.intersect1d(child, C.node.to_numpy())
     cand_nodes = C.node.to_numpy()[pside]
-    def child_doc(v):
-        return tokens([p for p, k in zip(paras[v], map(para_key, paras[v])) if k is None or (k not in frequent and not copied(k, v))], names)
-    docs = [child_doc(v) for v in child_nodes] + [tokens(drop_templates(paras[v], frequent), names) for v in cand_nodes]
+    kept = [[p for p, k in zip(paras[v], map(para_key, paras[v])) if k is None or (k not in frequent and not copied(k, v))]
+            for v in child_nodes] + [drop_templates(paras[v], frequent) for v in cand_nodes]
+    return nodes, C, child_nodes, cand_nodes, kept, names
+
+
+def build():
+    t0 = time.time()
+    nodes, C, child_nodes, cand_nodes, kept, names = kept_paragraphs(t0)
+    docs = [tokens(ps, names) for ps in kept]
+    del kept
     ntok = np.array([len(d) for d in docs])
     print(f"documents built; {time.time() - t0:.0f}s", flush=True)
     X, vocab = tfidf(docs)
@@ -111,6 +122,8 @@ def build():
     prow = np.full(len(nodes), -1, np.int64)
     prow[cand_nodes] = len(child_nodes) + np.arange(len(cand_nodes))
     ok_doc = ntok >= MIN_TOKENS
+    sp.save_npz(paths.INTERIM / "text_tfidf.npz", X)  # for placebo similarities (P20)
+    np.savez(paths.INTERIM / "text_rows.npz", crow=crow, prow=prow, ok_doc=ok_doc)
 
     def sims(kid, cand):
         a, b = crow[kid], prow[cand]

@@ -52,3 +52,11 @@ def test_hub_name_tokens_and_sizes_removed():
     names = name_vocab([], full_ids=["Qwen/Qwen2.5-Coder-7B-Instruct"])
     t = tokens(["Whisper tiny Spanish, a coder model for German law"], names)
     assert "coder" not in t and "tiny" not in t and "spanish" in t and "law" in t
+
+
+def test_mask_names_keeps_prose():
+    from hfpa.features.text import mask_names
+    names = {"qwen", "llama", "instruct"}
+    out = mask_names(["Fine-tuned Qwen2.5-7B-Instruct for Korean medical QA, see org/repo."], names)
+    assert "Qwen" not in out and "org/repo" not in out and "7B" not in out
+    assert "Korean medical QA" in out and "Fine-tuned" in out

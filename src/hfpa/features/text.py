@@ -149,3 +149,19 @@ def row_cosine(X, a, b, chunk=1_000_000):
 def drop_templates(paras, banned):
     """Paragraphs whose normalised key is not in `banned` (keys of parent-side or very frequent paragraphs)."""
     return [p for p in paras if para_key(p) not in banned]
+
+
+WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[.'_-][A-Za-z0-9]+)*")
+
+
+def mask_names(paras, names, max_chars=2000):
+    """Readable text for sentence embeddings and LLM prompts: ids removed; every Latin word that is a name / size
+    token (after splitting on . ' _ -) or contains a digit is dropped; stop words are kept."""
+    s = ID.sub(" ", " ".join(paras))
+
+    def keep(m):
+        w = m.group().lower()
+        parts = [p for p in re.split(r"[.'_-]", w) if p]
+        return "" if any(p in names or any(c.isdigit() for c in p) for p in parts) else m.group()
+
+    return re.sub(r"\s+", " ", WORD.sub(keep, s)).strip()[:max_chars]
