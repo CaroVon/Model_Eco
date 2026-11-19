@@ -165,3 +165,111 @@ def mask_names(paras, names, max_chars=2000):
         return "" if any(p in names or any(c.isdigit() for c in p) for p in parts) else m.group()
 
     return re.sub(r"\s+", " ", WORD.sub(keep, s)).strip()[:max_chars]
+
+
+# ============================================================================ v2 (F): names, near-duplicate templates
+# Words that describe a use; never removed as a name even when they open a repo name (chinese-roberta, math-shepherd)
+DESCRIPTIVE = set("""chinese german indonesian japanese mongolian turkish vietnamese korean arabic russian french spanish
+portuguese italian dutch polish hindi bengali urdu persian thai swedish finnish danish norwegian greek hebrew czech
+ukrainian romanian hungarian tamil telugu marathi malay tagalog swahili english multilingual cross lingual
+finance financial legal law math mathematics medical clinical bio biomedical chemistry protein code coding sql
+sentiment emotion toxic toxicity hate news poetry story summarization translation paraphrase segmentation detection
+classification question answering ner speaker speech voice music audio image vision video anime realistic portrait
+photo art twitter tweet review reviews dialogue conversation instruction reasoning retrieval embedding search
+conditional populism all my really test open line files teams master mix merged experiment reflect long neural lite
+""".split())
+
+
+def name_vocab_v2(model_ids):
+    """F: only organisation names and family names (first token of the repo name and its letter prefix) of
+    `model_ids`, plus size / variant words; descriptive words are kept. Tokens with digits are dropped separately."""
+    v = set(SIZE)
+    split = lambda x: [w for t in LATIN.findall(x.replace("_", "-")) for w in re.split(r"[.'-]", t) if w]
+    for mid in model_ids:
+        org, _, repo = str(mid).lower().partition("/")
+        v.update(split(org))
+        toks = split(repo)
+        if toks:
+            v.add(toks[0])
+            v.add(re.match(r"[a-z]*", toks[0]).group())
+    return v - STOP - DESCRIPTIVE - {""}
+
+
+_MH_P = np.uint64((1 << 61) - 1)
+
+
+def shingle_hashes(word_ids, offsets, k=5):
+    """Hashes of the k-word shingles of each paragraph. word_ids: concatenated int64 word ids; offsets: paragraph
+    starts (len n+1). Returns (hashes uint64, owner paragraph index). Paragraphs shorter than k words give none."""
+    n = len(offsets) - 1
+    L = len(word_ids)
+    if L < k:
+        return np.zeros(0, np.uint64), np.zeros(0, np.int64)
+    w = word_ids.astype(np.uint64)
+    h = np.zeros(L - k + 1, np.uint64)
+    for i in range(k):  # polynomial hash; uint64 arithmetic wraps
+        h = h * np.uint64(1_000_003) + w[i: L - k + 1 + i] + np.uint64(1)
+    owner = np.repeat(np.arange(n), np.diff(offsets))[: L - k + 1]
+    end = np.asarray(offsets)[1:][owner]
+    ok = np.arange(L - k + 1) + k <= end  # shingle inside its paragraph
+    return h[ok], owner[ok]
+
+
+def minhash(h, owner, n, num=63, seed=0, chunk=20_000_000):
+    """MinHash signatures [n, num] (uint32) of the shingle sets; rows without shingles stay at the max value."""
+    rng = np.random.default_rng(seed)
+    a = rng.integers(1, 1 << 31, num, dtype=np.uint64) | np.uint64(1)
+    b = rng.integers(0, 1 << 31, num, dtype=np.uint64)
+    sig = np.full((n, num), np.iinfo(np.uint32).max, np.uint32)
+    hh = (h >> np.uint64(32)) ^ (h & np.uint64(0xFFFFFFFF))  # fold to 32 bits
+    for s in range(0, len(hh), chunk):
+        x, o = hh[s: s + chunk], owner[s: s + chunk]
+        starts = np.r_[0, np.flatnonzero(np.diff(o)) + 1]
+        rows = o[starts]
+        for j in range(num):
+            v = ((a[j] * x + b[j]) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
+            m = np.minimum.reduceat(v, starts)
+            sig[rows, j] = np.minimum(sig[rows, j], m)
+    return sig
+
+
+def lsh_near_dup(sig, birth, node, df, bands=9, rows_per_band=7, thresh=0.8):
+    """Near-duplicate paragraphs (estimated Jaccard >= thresh, LSH banding then signature check against the
+    earliest member of each band bucket). Per paragraph key i (unique paragraph):
+      first_other[i]  earliest birth of a near-duplicate key first seen in another card (inf if none)
+      first_node[i]   that card
+      cluster_df[i]   number of cards carrying the key or a verified near-duplicate (max over bands)
+    birth / node: earliest card of each key; df: number of cards with the key. Rows with an empty signature skip."""
+    n = len(sig)
+    first_other = np.full(n, np.inf)
+    first_node = np.full(n, -1, np.int64)
+    cluster_df = df.astype(np.int64).copy()
+    has = sig[:, 0] != np.iinfo(np.uint32).max
+    for bnd in range(bands):
+        cols = sig[:, bnd * rows_per_band: (bnd + 1) * rows_per_band].astype(np.uint64)
+        key = np.zeros(n, np.uint64)
+        for c in range(cols.shape[1]):
+            key = key * np.uint64(0x9E3779B97F4A7C15) + cols[:, c]
+        idx = np.flatnonzero(has)
+        o = idx[np.lexsort((birth[idx], key[idx]))]
+        k = key[o]
+        st = np.r_[0, np.flatnonzero(np.diff(k)) + 1]
+        size = np.diff(np.r_[st, len(o)])
+        multi = st[size > 1]
+        for s0, sz in zip(multi, size[size > 1]):
+            grp = o[s0: s0 + sz]
+            head = grp[0]
+            agree = (sig[grp] == sig[head]).mean(1) >= thresh
+            mem = grp[agree]
+            tot = int(df[mem].sum())
+            cluster_df[mem] = np.maximum(cluster_df[mem], tot)
+            others = mem[1:]
+            upd = (birth[head] < first_other[others]) & (node[others] != node[head])
+            first_other[others[upd]] = birth[head]
+            first_node[others[upd]] = node[head]
+            if len(mem) > 1:  # the head's earliest near-duplicate in another card
+                second = mem[1]
+                if node[second] != node[head] and birth[second] < first_other[head]:
+                    first_other[head] = birth[second]
+                    first_node[head] = node[second]
+    return first_other, first_node, cluster_df

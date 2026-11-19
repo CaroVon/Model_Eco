@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=acmec_cpu
 #SBATCH --partition=general
+#SBATCH --account=general_group
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --time=12:00:00

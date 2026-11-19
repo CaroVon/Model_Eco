@@ -17,7 +17,18 @@ R = paths.CFG["replay"]
 SPECS = {
     "main_strat": dict(sampling="stratified", hub_k=R["hub_k"], s1=R["s1"], s0=R["s0"]),
     "main_unif": dict(sampling="uniform", s=R["uniform_s"], hub_k=R["hub_k"]),
+    # v2 (one rebuild): ex-ante FE set at the train / holdout cut, author history with pi = 1, three q schemes
+    "v2_pps": dict(sampling="pps", hub_k=0, pps_size=300, include_hist=True, v2=True),
+    "v2_strat": dict(sampling="stratified", hub_k=R["hub_k"], s1=R["s1"], s0=R["s0"], include_hist=True, v2=True),
+    "v2_unif": dict(sampling="uniform", s=R["uniform_s"], hub_k=0, include_hist=True, v2=True),
 }
+
+
+def holdout_time(E, birth, t0, frac):
+    """Train / holdout cut: last `frac` of main choices (children born after T0) in time."""
+    t = np.sort(birth[E.child_idx[E.rel_type.isin(MAIN)].to_numpy()])
+    t = t[t > t0]
+    return int(t[int(np.floor(len(t) * (1 - frac)))])
 MAIN = ["finetune", "adapter", "unspecified"]
 
 if __name__ == "__main__":
@@ -37,17 +48,26 @@ if __name__ == "__main__":
     re_ = pd.DataFrame({"child": E.child_idx, "parent": E.parent_idx, "rel_type": E.rel_type, "weight": E.weight})
     spec = {**SPECS[a.spec], "t_start": int(T0.timestamp()), "sample_frac": a.frac, "seed": paths.CFG["seed"],
             "recent_windows": tuple(R["recent_windows_days"])}
+    v2 = spec.pop("v2", False)
+    if v2:
+        t_h = holdout_time(E, nodes.birth.to_numpy(), int(T0.timestamp()), R["holdout_frac"])
+        spec["fe_time"] = t_h
     r = Replay(rn, re_, spec)
     ch, _ = r.run(out_dir=out, progress=True)
-    n_hold = int(np.ceil(len(ch) * R["holdout_frac"]))
-    ch["holdout"] = np.arange(len(ch)) >= len(ch) - n_hold
+    if v2:
+        ch["holdout"] = ch.t >= t_h
+    else:
+        n_hold = int(np.ceil(len(ch) * R["holdout_frac"]))
+        ch["holdout"] = np.arange(len(ch)) >= len(ch) - n_hold
+    ch["author"] = nodes.author_code.to_numpy()[ch.child]
     ch["modality_name"] = ch.modality.map(dict(zip(nodes.modality_code, nodes.modality)))
     ch.to_parquet(out / "choices.parquet")
 
     # --- checks (plan 6.5) ---
     rep = {"spec": name, "n_choices": len(ch), "n_modality_mismatch_dropped": r.n_mod_mismatch,
            "n_hubs": len(r.hubs), "choices_by_modality": ch.modality_name.value_counts().to_dict(),
-           "mean_cands": float(ch.n_cands.mean()) if len(ch) else 0}
+           "mean_cands": float(ch.n_cands.mean()) if len(ch) else 0, "holdout_share": float(ch.holdout.mean()),
+           "n_fe": int((r.fe_idx > 0).sum()), "fe_time": str(pd.Timestamp(spec.get("fe_time") or 0, unit="s"))}
     direct = E[E.rel_type.isin(MAIN)].parent.value_counts()
     deg_direct = np.zeros(len(nodes), np.int64)
     deg_direct[pd.Index(nodes.model_id).get_indexer(direct.index)] = direct.to_numpy()

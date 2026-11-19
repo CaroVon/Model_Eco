@@ -17,14 +17,18 @@ import numpy as np
 import pandas as pd
 
 DAY = 86400
-HUB, POS, ZERO, UNIF = 0, 1, 2, 3
+HUB, POS, ZERO, UNIF, HIST = 0, 1, 2, 3, 4
 
 DEFAULT_SPEC = dict(
     deg_types=("finetune", "adapter", "unspecified"),
     choice_types=("finetune", "adapter", "unspecified"),
     quant_types=("quantized",),
-    sampling="stratified",  # or "uniform"
+    sampling="stratified",  # or "uniform" or "pps"
     hub_k=500, s1=24, s0=24, s=50,
+    pps_size=300,  # pps: expected sampled set size, pi_j = min(1, c (d_j + 1))
+    include_hist=False,  # add the author's earlier parents (same modality) with pi = 1 (stratum HIST)
+    fe_time=None,  # seconds; FE ids = top fe_k parents by degree from edges with child born before fe_time
+    fe_k=500,
     modality_restrict=True,
     t_start=None,  # seconds; choices only for children born strictly after
     recent_windows=(7, 30, 90),
@@ -78,8 +82,16 @@ class Replay:
         self.is_hub = np.zeros(N, bool)
         self.is_hub[hubs] = True
         self.fe_idx = np.zeros(N, np.int32)
-        rank = np.argsort(-self.final_deg[hubs], kind="stable")
-        self.fe_idx[hubs[rank]] = np.arange(1, len(hubs) + 1)
+        if sp["fe_time"] is None:  # legacy: FE ids = hubs by final degree
+            rank = np.argsort(-self.final_deg[hubs], kind="stable")
+            self.fe_idx[hubs[rank]] = np.arange(1, len(hubs) + 1)
+        else:  # ex-ante FE set: degree at fe_time (end of the training period)
+            de = self.is_deg & (self.e_t < sp["fe_time"])
+            dh = np.bincount(self.e_parent[de], minlength=N)
+            top = np.argsort(-dh, kind="stable")[: sp["fe_k"]]
+            top = top[dh[top] > 0]
+            self.fe_idx[top] = np.arange(1, len(top) + 1)
+        self.fe_nodes = np.flatnonzero(self.fe_idx)
         self.hub_by_mod = [hubs[self.cmod[hubs] == m] for m in range(self.M)]  # sorted by idx == by birth
         self.hub_birth_by_mod = [self.birth[h] for h in self.hub_by_mod]
         self.mod_nodes = [np.flatnonzero(self.cmod == m) for m in range(self.M)]
@@ -119,6 +131,85 @@ class Replay:
             lq = np.append(lq, lq1 if pos else lq0)
             st = np.append(st, POS if pos else ZERO)
         return cands, lq, st
+
+    def _pps_c(self, m, n0):
+        """c with sum_j min(1, c (d_j + 1)) = pps_size over alive nodes of modality m (n0 of degree 0);
+        inf if the market is not larger than the target size (everything enters)."""
+        S = self.sp["pps_size"]
+        cnt = self.dcnt[m]
+        d = np.flatnonzero(cnt)[::-1]  # positive degrees, descending
+        d = d[d > 0]
+        n = cnt[d].astype(np.float64)
+        if n0 + n.sum() <= S:
+            return np.inf
+        w = n * (d + 1)
+        nsat = np.r_[0.0, np.cumsum(n)]  # k top bins saturated
+        W = n0 + w.sum() - np.r_[0.0, np.cumsum(w)]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            c = (S - nsat) / W
+        K = len(d)
+        ok = (c > 0) & np.isfinite(c)
+        ok[1:] &= c[1:] * (d + 1) >= 1  # last saturated bin really saturated
+        ok[:K] &= c[:K] * (d + 1) < 1  # first unsaturated bin not saturated
+        ok &= c <= 1  # degree-0 nodes (weight 1) not saturated
+        k = int(np.flatnonzero(ok)[0])
+        return float(c[k])
+
+    def _sample_pps(self, m, t, p):
+        """Poisson sampling with pi_j = min(1, c (d_j + 1)) (degree at t); log q = log pi_j."""
+        rng, deg = self.rng, self.deg
+        key = (t, m)
+        if self._c_key != key:
+            na = int(np.searchsorted(self.mod_birth[m], t, "left"))
+            n1 = int(self.pos_n[m])
+            self._c_val = (self._pps_c(m, na - n1), na, n1)
+            self._c_key = key
+        c, na, n1 = self._c_val
+        P = self.pos_arr[m][:n1]
+        pi1 = np.minimum(1.0, c * (deg[P] + 1.0))
+        take = rng.random(n1) < pi1
+        pool1, lq1 = P[take], np.log(pi1[take])
+        n0 = na - n1
+        pi0 = min(1.0, c)
+        alive = self.mod_nodes[m][:na]
+        k0 = int(rng.binomial(n0, pi0)) if n0 > 0 else 0
+        if k0 == 0:
+            pool0 = np.empty(0, np.int64)
+        elif k0 > 0.3 * n0 or n0 < 0.1 * na:
+            z = alive[deg[alive] == 0]
+            pool0 = z[rng.choice(len(z), k0, replace=False)]
+        else:
+            got = {}
+            while len(got) < k0:
+                dd = alive[rng.integers(0, na, size=2 * k0 + 8)]
+                for j in dd[deg[dd] == 0]:
+                    got.setdefault(int(j), None)
+            pool0 = np.fromiter(got, np.int64)[:k0]
+        cands = np.concatenate([pool1, pool0])
+        lq = np.concatenate([lq1, np.full(len(pool0), np.log(pi0))])
+        st = np.where(lq == 0, HUB, np.where(deg[cands] > 0, POS, ZERO))
+        if not (cands == p).any():
+            pip = min(1.0, c * (deg[p] + 1.0))
+            cands = np.append(cands, p)
+            lq = np.append(lq, np.log(pip))
+            st = np.append(st, HUB if pip >= 1 else (POS if deg[p] > 0 else ZERO))
+        return cands, lq, st
+
+    def _add_hist(self, a, m, cands, lq, st):
+        """Earlier parents of the author in modality m enter with certainty (pi = 1)."""
+        hist = self.author_hist.get(a)
+        if not hist:
+            return cands, lq, st
+        H = np.fromiter(hist, np.int64, len(hist))
+        H = H[self.cmod[H] == m]
+        if len(H) == 0:
+            return cands, lq, st
+        inn = np.isin(cands, H)
+        lq = np.where(inn, 0.0, lq)
+        st = np.where(inn, HIST, st)
+        extra = H[~np.isin(H, cands)]
+        return (np.concatenate([cands, extra]), np.concatenate([lq, np.zeros(len(extra))]),
+                np.concatenate([st, np.full(len(extra), HIST)]))
 
     def _sample_uniform(self, m, t, p):
         na = int(np.searchsorted(self.mod_birth[m], t, "left"))
@@ -164,10 +255,13 @@ class Replay:
         self.author_hist, self.author_roots = defaultdict(set), defaultdict(set)
         self.pos_arr = [np.empty(len(x), np.int64) for x in self.mod_nodes]
         self.pos_n = np.zeros(self.M, np.int64)
+        self.dcnt = [np.zeros(int(self.final_deg.max()) + 2, np.int64) for _ in range(self.M)]
+        self._c_key = None
         deg_e = np.flatnonzero(self.is_deg)
         deg_t, deg_p = self.e_t[deg_e], self.e_parent[deg_e]
         t_start = -np.inf if sp["t_start"] is None else sp["t_start"]
-        sampler = self._sample_stratified if sp["sampling"] == "stratified" else self._sample_uniform
+        sampler = {"stratified": self._sample_stratified, "uniform": self._sample_uniform,
+                   "pps": self._sample_pps}[sp["sampling"]]
 
         E = len(self.e_t)
         starts = np.r_[0, np.flatnonzero(np.diff(self.e_t)) + 1]
@@ -217,6 +311,8 @@ class Replay:
                     continue
                 k = len(choices)
                 cands, lq, st = sampler(m, t, p)
+                if sp["include_hist"]:
+                    cands, lq, st = self._add_hist(int(self.author[c]), m, cands, lq, st)
                 buf.append(self._features(k, c, p, t, cands, lq, st))
                 choices.append((k, c, p, t, m, self.e_rel[e], self.e_w[e], len(cands), int(self.deg[p])))
 
@@ -228,6 +324,10 @@ class Replay:
                         m = self.cmod[p]
                         self.pos_arr[m][self.pos_n[m]] = p
                         self.pos_n[m] += 1
+                    dc = self.dcnt[self.cmod[p]]
+                    if self.deg[p] > 0:
+                        dc[self.deg[p]] -= 1
+                    dc[self.deg[p] + 1] += 1
                     self.deg[p] += 1
                     for w in sp["recent_windows"]:
                         self.recent[w][p] += 1

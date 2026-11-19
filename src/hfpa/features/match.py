@@ -191,3 +191,172 @@ def build(rows, ch, A, full, author):
             out["ds_couse"][s:e] = np.log1p(cnt)
         out["org_noncomm"][s:e] = A["org"][c] & A["noncomm"][J]
     return pd.DataFrame(out, index=rows.index)
+
+
+# ============================================================================ v2 (time-filtered, A2-A4)
+COLS_V2 = ["hist_has", "size_dist", "size_na", "task_hist", "lang_hist", "ds_has", "ds_lang", "ds_task", "ds_couse"]
+
+
+class TimeProfiles:
+    """A2: dataset demand profiles as of time t (only models born strictly before t declare the dataset).
+    Per dataset: sorted declaration births, cumulative language-bit counts [n+1, NBITS] and cumulative task counts
+    [n+1, n_task]. Datasets declared by fewer than MIN_DS + 1 models are dropped (never usable)."""
+
+    def __init__(self, A, birth):
+        dec = defaultdict(list)
+        for i, D in enumerate(A["ds"]):
+            if D is not None:
+                for d in set(D):
+                    dec[d].append(i)
+        self.n_task = int(A["task"].max()) + 2  # column 0 = missing task
+        self.prof = {}
+        for d, v in dec.items():
+            if len(v) < MIN_DS + 1:
+                continue
+            v = np.array(v)
+            v = v[np.argsort(birth[v], kind="stable")]
+            L = bits(A["lang"][v]).astype(np.int32)
+            T = np.zeros((len(v), self.n_task), np.int32)
+            T[np.arange(len(v)), A["task"][v] + 1] = 1
+            z = lambda M: np.vstack([np.zeros((1, M.shape[1]), np.int32), np.cumsum(M, 0, dtype=np.int32)])
+            self.prof[d] = (birth[v], z(L), z(T))
+
+    def at(self, d, t):
+        """(m, lang counts, task counts) of dataset d over models born before t, or None."""
+        p = self.prof.get(d)
+        if p is None:
+            return None
+        k = int(np.searchsorted(p[0], t, "left"))
+        return k, p[1][k], p[2][k]
+
+
+def couse_index_v2(full, A, author):
+    """(dataset, parent) -> (sorted child births, child authors, child ids) of main choices whose child declares
+    the dataset (for ds_couse and for A4: removing the candidate's own children from the profile)."""
+    idx = defaultdict(list)
+    for c, p, t in zip(full.child.to_numpy(), full.parent.to_numpy(), full.t.to_numpy()):
+        D = A["ds"][c]
+        if D is not None:
+            for d in set(D):
+                idx[(d, p)].append((t, author[c], c))
+    out = {}
+    for k, v in idx.items():
+        v.sort()
+        out[k] = tuple(np.array([x[i] for x in v]) for i in range(3))
+    return out
+
+
+def _demand(m, lc, tc):
+    """Language mask (bool NBITS) and task set common (share >= SHARE) among m declaring models."""
+    if m < MIN_DS:
+        return None
+    L = lc / m >= SHARE
+    T = {int(t) - 1 for t in np.flatnonzero(tc / m >= SHARE) if t > 0}
+    return L, T
+
+
+def _mask(L):
+    return np.uint64(int(np.sum(L.astype(np.uint64) << _SHIFT)))
+
+
+def build_v2(rows, ch, A, full, author, prof, cidx, hist=None, drop_parent_ds=True, drop_cand_children=True):
+    """v2 demand-match features. rows sorted by choice_id; ch indexed by choice_id with child, parent, t.
+    A2 profiles as of the choice time (prof: TimeProfiles); A3 the child's datasets that the chosen parent also
+    declares are not demand (drop_parent_ds); A4 the candidate's own earlier children are removed from the
+    profile used for that candidate (drop_cand_children). org_noncomm dropped. Same author-history features as v1."""
+    hist = hist if hist is not None else author_history(full, author)
+    out = {k: np.zeros(len(rows), np.float32) for k in COLS_V2}
+    cid = rows.choice_id.to_numpy()
+    starts = np.r_[0, np.flatnonzero(np.diff(cid)) + 1]
+    ends = np.r_[starts[1:], len(rows)]
+    cand_all = rows.cand_id.to_numpy()
+    lang_bits = None
+    for s, e in zip(starts, ends):
+        k = cid[s]
+        c, t, par = int(ch.child.at[k]), ch.t.at[k], int(ch.parent.at[k])
+        a = author[c]
+        J = cand_all[s:e]
+        # ---- author history (as v1)
+        ht, hp = hist.get(a, (np.empty(0), np.empty(0, int)))
+        H = np.unique(hp[ht < t])
+        inH = np.isin(J, H)
+        nH = len(H) - inH
+        out["hist_has"][s:e] = nH > 0
+        if len(H):
+            hl = A["logp"][H]
+            hok = np.isfinite(hl)
+            med = np.median(hl[hok]) if hok.any() else np.nan
+            lj = A["logp"][J]
+            dist = np.abs(lj - med)
+            for i in np.flatnonzero(inH & hok.any()):
+                rest = hl[hok & (H != J[i])]
+                dist[i] = abs(lj[i] - np.median(rest)) if len(rest) else np.nan
+            na = ~np.isfinite(dist)
+            out["size_dist"][s:e] = np.where(na, 0, dist)
+            out["size_na"][s:e] = na
+            tc = Counter(A["task"][H][A["task"][H] >= 0].tolist())
+            tj = A["task"][J]
+            eff = np.array([tc.get(x, 0) for x in tj]) - inH
+            out["task_hist"][s:e] = (tj >= 0) & (eff > 0)
+            C = bits(A["lang"][H]).sum(0)
+            B = bits(A["lang"][J])
+            effl = C[None, :] - B * inH[:, None]
+            out["lang_hist"][s:e] = (B & (effl > 0)).any(1)
+        else:
+            out["size_na"][s:e] = 1
+        # ---- dataset demand
+        Dc = A["ds"][c]
+        if Dc is None:
+            continue
+        Ds = set(Dc)
+        if drop_parent_ds and A["ds"][par] is not None:
+            Ds -= set(A["ds"][par])
+        base = {}
+        for d in Ds:
+            r = prof.at(d, t)
+            if r is not None:
+                dm = _demand(*r)
+                if dm is not None:
+                    base[d] = (r, dm)
+        cnt = np.zeros(len(J))
+        override = {}  # candidate position -> (L, T) after removing its own children (A4)
+        for d in Ds:
+            for i, j in enumerate(J):
+                v = cidx.get((d, j))
+                if v is None:
+                    continue
+                pre = v[0] < t
+                if not pre.any():
+                    continue
+                cnt[i] += pre.sum() - (pre & (v[1] == a)).sum()
+                if drop_cand_children and d in base:
+                    kids = v[2][pre]
+                    (m, lc, tcn), _ = base[d]
+                    lc2 = lc - bits(A["lang"][kids]).sum(0)
+                    tc2 = tcn.copy()
+                    np.subtract.at(tc2, A["task"][kids] + 1, 1)
+                    override.setdefault(i, {})[d] = _demand(m - len(kids), lc2, tc2)
+        out["ds_couse"][s:e] = np.log1p(cnt)
+        if not base:
+            continue
+        out["ds_has"][s:e] = 1
+        L0 = np.zeros(NBITS, bool)
+        T0 = set()
+        for _, (Ld, Td) in base.values():
+            L0 |= Ld
+            T0 |= Td
+        lm = np.full(len(J), _mask(L0), np.uint64)
+        tsets = [T0] * len(J)
+        for i, od in override.items():
+            L, T = np.zeros(NBITS, bool), set()
+            for d, (_, dm) in base.items():
+                dm = od.get(d, dm) if d in od else dm
+                if dm is not None:
+                    L |= dm[0]
+                    T |= dm[1]
+            lm[i] = _mask(L)
+            tsets[i] = T
+        tj = A["task"][J]
+        out["ds_lang"][s:e] = (A["lang"][J] & lm) > 0
+        out["ds_task"][s:e] = np.array([x >= 0 and x in T for x, T in zip(tj, tsets)])
+    return pd.DataFrame(out, index=rows.index)

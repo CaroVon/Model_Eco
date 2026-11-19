@@ -60,3 +60,29 @@ def test_mask_names_keeps_prose():
     out = mask_names(["Fine-tuned Qwen2.5-7B-Instruct for Korean medical QA, see org/repo."], names)
     assert "Qwen" not in out and "org/repo" not in out and "7B" not in out
     assert "Korean medical QA" in out and "Fine-tuned" in out
+
+
+def test_v2_names_keep_descriptive_words():
+    from hfpa.features.text import name_vocab_v2
+    v = name_vocab_v2(["hfl/chinese-roberta-wwm-ext", "meta-llama/Llama-3-8B", "AI-MO/math-shepherd"])
+    assert "llama" in v and "meta" in v and "hfl" in v
+    assert "chinese" not in v and "math" not in v and "roberta" not in v  # only the first repo token is a family
+
+
+def test_minhash_near_duplicates():
+    import numpy as np
+    from hfpa.features.text import lsh_near_dup, minhash, shingle_hashes
+    rng = np.random.default_rng(0)
+    base = rng.integers(0, 10_000, 60)
+    near = base.copy()
+    near[30] = 99_999  # one word changed: Jaccard of 5-shingles ~ 0.85
+    other = rng.integers(0, 10_000, 60)
+    words = np.concatenate([base, near, other])
+    off = np.array([0, 60, 120, 180])
+    h, own = shingle_hashes(words, off)
+    sig = minhash(h, own, 3)
+    est = (sig[0] == sig[1]).mean()
+    assert est > 0.7 and (sig[0] == sig[2]).mean() < 0.1
+    fo, fn, cdf = lsh_near_dup(sig, birth=np.array([1.0, 5.0, 2.0]), node=np.array([10, 11, 12]), df=np.array([1, 1, 1]),
+                               bands=21, rows_per_band=3, thresh=0.7)
+    assert fo[1] == 1.0 and fn[1] == 10 and np.isinf(fo[2]) and cdf[0] == 2

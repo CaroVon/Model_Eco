@@ -37,3 +37,57 @@ def test_clogit_recovers_pa():
     res = CLogit(2, device="cpu").fit(D)
     a, se = res["coef"][1], res["se"][1]
     assert abs(a - 1.0) < 3 * se + 0.05, (a, se)
+
+
+def test_pps_inclusion_matches_pi():
+    """Empirical inclusion frequency of each node ~ pi = exp(log_q); expected set size ~ pps_size."""
+    nodes, edges, _ = generate(n=1500, alpha=1.0, beta0=-1.0, seed=3)
+    # repeated draws of the last choice (same state, different seeds)
+    R = 200
+    hits, pis, sizes = {}, {}, []
+    for seed in range(R):
+        ch, rows = Replay(nodes, edges, {"sampling": "pps", "hub_k": 0, "pps_size": 60, "seed": seed}).run()
+        last = rows[rows.choice_id == ch.choice_id.max()]
+        sizes.append((last.chosen == 0).sum())
+        for j, lq, c in zip(last.cand_id, last.log_q, last.chosen):
+            if c:
+                continue
+            hits[j] = hits.get(j, 0) + 1
+            pis[j] = np.exp(lq)
+    sizes = np.array(sizes)
+    assert abs(sizes.mean() - 60) < 3, sizes.mean()
+    # pi = 1 nodes always present; high-pi nodes appear about pi of the time
+    certain = [j for j, p in pis.items() if p >= 1]
+    assert all(hits[j] >= R - 1 for j in certain)  # chosen parent may replace one draw
+    mid = [j for j, p in pis.items() if 0.2 < p < 0.9]
+    if mid:
+        err = np.mean([hits[j] / R - pis[j] for j in mid])
+        assert abs(err) < 0.05, err
+
+
+def test_clogit_recovers_pa_all_q():
+    nodes, edges, truth = generate(n=8000, alpha=1.0, beta0=-1.0, seed=1)
+    for spec in ({"sampling": "pps", "hub_k": 0, "pps_size": 60},
+                 {"sampling": "uniform", "s": 60, "hub_k": 0},
+                 {"hub_k": 50, "s1": 20, "s0": 20}):
+        ch, rows = Replay(nodes, edges, spec).run()
+        D = to_padded(rows, ["has_deg", "log_deg"])
+        res = CLogit(2, device="cpu").fit(D)
+        a, se = res["coef"][1], res["se"][1]
+        assert abs(a - 1.0) < 3 * se + 0.05, (spec, a, se)
+
+
+def test_history_included_with_certainty():
+    nodes, edges = toy()
+    for sampling in ("pps", "uniform", "stratified"):
+        r = Replay(nodes, edges, {"sampling": sampling, "hub_k": 0, "s": 1, "s1": 1, "s0": 1, "pps_size": 1,
+                                  "include_hist": True})
+        ch, rows = r.run()
+        last = rows[rows.choice_id == 2].set_index("cand_id")  # author 3 used parent 0 before
+        assert 0 in last.index and last.loc[0, "log_q"] == 0 and last.loc[0, "stratum"] == 4
+
+
+def test_fe_time_ex_ante():
+    nodes, edges = toy()
+    r = Replay(nodes, edges, {"fe_time": 3 * DAY, "fe_k": 5})
+    assert r.fe_idx[0] == 1 and r.fe_idx[2] == 0  # node 2's child is born on day 40

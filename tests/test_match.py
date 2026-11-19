@@ -37,3 +37,45 @@ def test_dataset_demand_excludes_child_and_future():
     assert list(f.ds_task) == [0, 1, 0]
     assert np.isclose(f.ds_couse[1], np.log1p(3))  # child 8 comes after the choice
     assert list(f.org_noncomm) == [0, 0, 1]
+
+
+def toy_v2(parent_ds=None, **kw):
+    from hfpa.features.match import TimeProfiles, build_v2, couse_index_v2
+    nodes = pd.DataFrame({
+        "pipeline_tag": ["text-generation", "text-to-image", "text-generation", None, "text-generation",
+                         "text-to-image", "text-to-image", "text-to-image", "text-to-image", "text-generation"],
+        "params_b": [7, 1, 7, np.nan, np.nan, 1, 1, 1, 1, 7],
+        "license_cat": ["apache", "mit", "noncommercial"] + ["none"] * 7,
+        "major_org": [False] * 10})
+    # 9: German text model on d1 born at t=1 (no parent); 5,6,7 French children of parent 1 on d1; 8 after the choice
+    langs = [["en"], ["fr"], ["en"], None, ["de"], ["fr"], ["fr"], ["fr"], ["fr"], ["de"]]
+    ds = [None, ["d2"], parent_ds, None, ["d1", "d2"], ["d1"], ["d1"], ["d1"], ["d1"], ["d1"]]
+    birth = np.array([0, 0, 0, 1, 5, 2, 3, 4, 10, 1])
+    author = np.array([9, 9, 9, 0, 0, 1, 1, 1, 1, 2])
+    full = pd.DataFrame({"child": [3, 5, 6, 7, 4, 8], "parent": [0, 1, 1, 1, 2, 1], "t": [1, 2, 3, 4, 5, 10]})
+    ch = pd.DataFrame({"choice_id": [0], "child": [4], "parent": [2], "t": [5]}).set_index("choice_id", drop=False)
+    rows = pd.DataFrame({"choice_id": [0, 0, 0], "cand_id": [0, 1, 2]})
+    A = node_attrs(nodes, langs, ds)
+    return build_v2(rows, ch, A, full, author, TimeProfiles(A, birth), couse_index_v2(full, A, author), **kw).set_index(rows.cand_id)
+
+
+def test_v2_profile_is_time_filtered():
+    from hfpa.features.match import TimeProfiles
+    nodes = pd.DataFrame({"pipeline_tag": ["a"] * 5, "params_b": 1.0, "license_cat": "none", "major_org": False})
+    A = node_attrs(nodes, [["fr"]] * 5, [["d"]] * 5)
+    P = TimeProfiles(A, np.array([1, 2, 3, 4, 9]))
+    assert P.at("d", 4)[0] == 3 and P.at("d", 10)[0] == 5  # born strictly before t
+
+
+def test_v2_candidate_children_removed():
+    # d1 before t=5: 5,6,7 (French, text-to-image, children of 1) and 9 (German, text-generation) -> m = 4
+    f = toy_v2(drop_cand_children=False)
+    assert list(f.ds_has) == [1, 1, 1] and list(f.ds_lang) == [0, 1, 0] and list(f.ds_task) == [0, 1, 0]
+    g = toy_v2()  # for candidate 1, its own children are removed: profile = {9} only -> m = 1 < MIN_DS, no demand
+    assert g.ds_lang[1] == 0 and g.ds_task[1] == 0 and np.isclose(g.ds_couse[1], np.log1p(3))
+    assert g.ds_lang[0] == 0  # other candidates keep the full profile (fr / text-to-image)
+
+
+def test_v2_parent_datasets_dropped():
+    assert toy_v2(parent_ds=["d1"]).ds_has.max() == 0  # chosen parent 2 declares d1: inherited, not demand
+    assert toy_v2(parent_ds=["d1"], drop_parent_ds=False).ds_has.max() == 1
