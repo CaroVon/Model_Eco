@@ -1,0 +1,37 @@
+\begin{table}[h]
+\centering
+\caption{Full-data estimates (stratified design) against the earlier 10\% sample. Differences outside the 10\% interval concern features redefined in the rebuild.}
+\label{tab:validate}
+\scriptsize
+\begin{tabular}{lccrr}
+\toprule
+Feature & 10\% sample & Full & In CI & SE ratio \\
+\midrule
+\texttt{author\_family} & -0.062 (0.085) & -0.065 (0.062) & yes & 0.73 \\
+\texttt{bench\_na} & 0.176 (0.096) & -0.055 (0.048) & no & 0.50 \\
+\texttt{bench\_z} & 0.015 (0.080) & -0.110 (0.025) & yes & 0.31 \\
+\texttt{ds\_couse} & 1.150 (0.040) & 1.217 (0.020) & yes & 0.48 \\
+\texttt{ds\_lang} & 0.459 (0.122) & 0.340 (0.051) & yes & 0.42 \\
+\texttt{ds\_task} & 1.245 (0.149) & 0.970 (0.116) & yes & 0.78 \\
+\texttt{has\_deg} & 4.687 (0.079) & 4.711 (0.082) & yes & 1.03 \\
+\texttt{lang\_hist} & 0.360 (0.042) & 0.239 (0.027) & no & 0.64 \\
+\texttt{lco2} & 0.676 (0.135) & 0.773 (0.095) & yes & 0.70 \\
+\texttt{legacy} & 1.372 (0.052) & 1.379 (0.033) & yes & 0.64 \\
+\texttt{lib\_diffusers} & 0.442 (0.269) & 0.555 (0.154) & yes & 0.57 \\
+\texttt{lib\_peft} & -1.763 (0.305) & -1.674 (0.139) & yes & 0.46 \\
+\texttt{lib\_sentence-transformers} & 0.873 (0.113) & 0.941 (0.047) & yes & 0.41 \\
+\texttt{lib\_transformers} & 0.196 (0.082) & 0.202 (0.036) & yes & 0.45 \\
+\texttt{log\_age} & -0.539 (0.021) & -0.540 (0.019) & yes & 0.90 \\
+\texttt{log\_deg} & 0.347 (0.014) & 0.336 (0.011) & yes & 0.79 \\
+\texttt{lquant} & 0.099 (0.013) & 0.070 (0.008) & no & 0.65 \\
+\texttt{lrec30} & 0.631 (0.019) & 0.617 (0.015) & yes & 0.80 \\
+\texttt{major\_org} & 0.300 (0.046) & 0.681 (0.031) & no & 0.68 \\
+\texttt{same\_author} & 6.566 (0.449) & 6.319 (0.504) & yes & 1.12 \\
+\texttt{size\_dist} & -0.173 (0.025) & -0.226 (0.017) & no & 0.66 \\
+\texttt{size\_na} & -0.780 (0.062) & -0.824 (0.035) & yes & 0.56 \\
+\texttt{task\_hist} & 1.909 (0.077) & 1.882 (0.044) & yes & 0.57 \\
+\texttt{txt\_na} & -0.743 (0.074) & -0.368 (0.058) & no & 0.78 \\
+\texttt{txt\_sim} & 4.559 (0.656) & 4.360 (0.757) & yes & 1.15 \\
+\bottomrule
+\end{tabular}
+\end{table}

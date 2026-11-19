@@ -1,0 +1,100 @@
+\section{Method}
+\label{sec:method}
+
+\subsection{Base-model selection as a discrete choice}
+Following \citet{overgoor2019choosing}, each first adoption $k$ is a choice of one parent $j_k$ from the market
+$\M_k$. Developer $k$ values candidate $j$ at $U_{kj} = \theta^\top x_{kj} + \varepsilon_{kj}$ with i.i.d.\ Gumbel
+errors, which gives the conditional logit \citep{mcfadden1974conditional}
+\begin{equation}
+  P(j \mid \M_k) = \frac{\exp(\theta^\top x_{kj})}{\sum_{l \in \M_k} \exp(\theta^\top x_{kl})}.
+  \label{eq:logit}
+\end{equation}
+The features $x_{kj}$ are the four groups of \cref{sec:data}; they vary over candidates and over time and, for
+demand match and inertia, over developers. With $\theta = 0$ the model is \emph{uniform attachment}, every
+alive model equally likely; preferential attachment is the special case in which only $\log d$ and $\1[d>0]$
+enter. We interpret $\theta$ descriptively, as the weights that best summarize which signals choices co-move with,
+not as causal effects (\cref{sec:discussion}).
+
+\subsection{Sampling the competitors that matter}
+\label{sec:sampling}
+Evaluating \eqref{eq:logit} over a median of \marketMedian{} alternatives for \nFirst{} choices is infeasible, so we
+sample a candidate set $\D_k \subset \M_k$. Each alternative enters independently (Poisson sampling) with
+\begin{equation}
+  \pi_{kl} = \min\{1,\; c_k (d_{kl} + 1)\}, \qquad \textstyle\sum_{l \in \M_k} \pi_{kl} = S,
+  \label{eq:pps}
+\end{equation}
+where $d_{kl}$ is the degree of $l$ just before choice $k$ and $c_k$ is solved in closed form from the degree
+histogram of the market; the chosen parent is always included. We use $S=300$; on average 8.6 candidates per choice
+have $\pi=1$, so the incumbents a developer is most likely to weigh are present in every set, and the rest of the
+set is a probability-proportional-to-size sample of the long tail.
+
+\begin{proposition}[Sampling correction]
+\label{prop:pps}
+Under \eqref{eq:logit} and the sampling scheme \eqref{eq:pps},
+\begin{equation}
+  P(j \mid \D_k) = \frac{\exp(\theta^\top x_{kj} - \log \pi_{kj})}{\sum_{l \in \D_k} \exp(\theta^\top x_{kl} - \log
+  \pi_{kl})},
+  \label{eq:corrected}
+\end{equation}
+and maximizing $\sum_k \log P(j_k \mid \D_k)$ gives a consistent estimator of $\theta$.
+\end{proposition}
+The proof (\cref{app:sampling}) applies McFadden's positive-conditioning argument \citep{mcfadden1978modelling}:
+given that $j$ was chosen, the probability of drawing $\D$ is $\prod_{l \in \D \setminus j} \pi_l
+\prod_{l \notin \D}(1-\pi_l)$, so the ratio for two members of $\D$ is $\pi_l / \pi_j$. The offset $-\log \pi$
+makes uniform attachment, $\theta = 0$, the natural baseline: it assigns every sampled candidate the weight
+$1/\pi$, i.e.\ every model in the full market the same probability.
+
+Why sample proportionally to degree? Consistency holds for any $\pi > 0$, but efficiency does not. A uniform sample
+of 300 from a market of $3 \times 10^5$ almost never contains the dozen models that receive most adoptions, so each
+choice compares the chosen parent mostly with never-used models, and the likelihood learns little about how
+developers trade off one popular model against another. \Cref{sec:robustq} shows that this is not only a matter of
+precision: with uniform sets the estimated weights change.
+
+\subsection{Estimation and inference}
+The training data have 35.2 million (choice, candidate) rows. We group choices into buckets of similar set size,
+keep the 26 features on the GPU in single precision and accumulate the log-likelihood, gradient and Hessian in double
+precision; L-BFGS with an analytic Hessian fits the full model in under a minute on one A100. Standard errors are
+clustered by author \citep{cameron2015practitioner}: \nFirstAuthors{} authors make the \nFirst{} first adoptions, and
+the choices of one author are strongly dependent (\cref{app:validation}). For every derived quantity, including the
+Shapley shares below, we use a multiplier (Bayesian) bootstrap over authors \citep{rubin1981bayesian}: each
+replicate draws a weight $w_a \sim \mathrm{Exp}(1)$ per author, reweights the author's choices and refits from the
+point estimate.
+
+\subsection{Decomposing the likelihood gain}
+\label{sec:shapley}
+The four groups are correlated (popular models also tend to be well documented and to match common tasks), so the
+change in fit from adding a group depends on which groups are already in the model. We therefore attribute the
+log-likelihood gain over uniform attachment, $G(\mathcal{S}) = \ell(\hat\theta_{\mathcal{S}}) - \ell(0)$ for the
+model with the groups in $\mathcal{S}$, by the Shapley value \citep{shapley1953value}
+\begin{equation}
+  \phi_g = \sum_{\mathcal{S} \subseteq \mathcal{G} \setminus \{g\}}
+  \frac{|\mathcal{S}|!\,(|\mathcal{G}|-|\mathcal{S}|-1)!}{|\mathcal{G}|!}
+  \big[G(\mathcal{S} \cup \{g\}) - G(\mathcal{S})\big],
+  \label{eq:shapley}
+\end{equation}
+and report shares $\phi_g / G(\mathcal{G})$. With four groups this needs $2^4 = 16$ fits, each warm-started from
+a subset one group smaller. We compute the shares both in-sample and on the holdout (mean per-choice
+log-likelihood), where a group can only gain by predicting future choices.
+
+\subsection{Bounding general quality}
+\label{sec:bounds}
+Benchmark scores cover few models, so a small quality share could reflect missing measurement rather than
+indifference to quality. We bound the quality share from above by adding an intercept $\phi_j$ for each of the
+500 most adopted parents (assigned ex ante, \cref{sec:data}). The fixed effects absorb every time-invariant
+attribute of a hub: unmeasured quality, but also brand, tutorials and default status. Entering the fixed effects as
+a fifth Shapley player and counting their entire share as quality gives the largest share that any fixed hub
+attribute could contribute. To see how much of this bound is quality, we regress $\hat\phi_j$ on external quality
+measures (Open LLM Leaderboard v2 average, arena ratings; controls for parameter count and re-distributor accounts)
+and correct the $R^2$ for estimation noise using the bootstrap variance of $\hat\phi_j$; the noise-corrected share
+of $\mathrm{Var}(\phi)$ explained by quality splits the fixed-effect share into a quality and a popularity part.
+
+\subsection{Does the decomposition recover known mechanisms?}
+\label{sec:validation}
+Two checks support the procedure (details in \cref{app:validation}). First, on synthetic preferential-attachment
+networks the corrected likelihood recovers the attachment exponent under all three sampling designs. Second, we
+replace every observed choice with a draw from a known utility on the same candidate sets and re-run the full
+decomposition. When choices are drawn from the popularity terms alone, the decomposition attributes
+\recSfPop\% of the gain to popularity; when drawn from quality and demand match alone, it attributes \recQfFit\% to
+fit; when drawn from the full estimated model, it returns \recFullPop\%, \recFullMatch\% and \recFullInertia\% for
+popularity, demand match and inertia, the shares estimated on the real choices. The decomposition can tell the
+mechanisms apart, and it does not manufacture a popularity share where none was generated.

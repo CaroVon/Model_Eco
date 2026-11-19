@@ -1,0 +1,19 @@
+\section{Coefficients and Further Robustness}
+\label{app:robust}
+
+\input{tables/tab_coef}
+
+\paragraph{Reading the coefficients.}
+Coefficients are utility weights. The last column of \cref{tab:coef} converts each into the factor on $(1+d)$ that
+gives the same change in utility, using $\partial U / \partial \log d$ as the exchange rate; binary features are
+switched from 0 to 1, continuous ones moved by one standard deviation. The two largest multiples belong to
+\texttt{has\_deg} (a model with at least one earlier child) and \texttt{same\_author} (the author's own model): having
+been adopted at all, and being one's own, dominate everything else.
+
+\paragraph{Demand signals.}
+Demand match can be detected only where the choice carries a demand signal: an author history, a declared dataset
+with a usable profile, or at least five tokens of cleaned card text. \sigShare\% of first adoptions do. Restricted to
+them, demand match accounts for \sigMatch\% of the gain; reweighting them to the composition of all first adoptions
+(author experience $\times$ major-organization author) gives \sigMatchRw\%. The main estimate is a lower bound in
+this sense: fit to needs that leave no trace in the data is attributed to no group.
+\todo{Add: card-text threshold sensitivity (1/5/10/20/50 tokens); old-card robustness for 39 hubs.}

@@ -1,0 +1,90 @@
+\section{What Drives Base-Model Choice}
+\label{sec:results}
+
+\input{tables/tab_shapley}
+
+\subsection{Popularity explains almost all of what can be explained}
+\Cref{tab:shapley} reports the decomposition for the main specification. Popularity accounts for
+\shPopularity\% of the log-likelihood gain over uniform attachment (95\% CI \shPopularityLo--\shPopularityHi),
+demand match for \shMatch\% (\shMatchLo--\shMatchHi), inertia for \shInertia\% (\shInertiaLo--\shInertiaHi) and
+general quality for less than 0.01\%. The holdout shares are nearly identical (\shHoldPopularity\%, \shHoldMatch\%,
+\shHoldInertia\%), so the ranking is not an artifact of in-sample fit. Every group is jointly significant (likelihood
+ratio for dropping popularity \lrPop, demand match \lrMatch, inertia \lrInertia, quality \lrQual{} on 1 d.f.); the
+question is not whether developers respond to fit but how much of their choices fit accounts for. Out of sample the
+model gains \holdGain{} nats per choice over uniform attachment and ranks the chosen parent first among the
+$\approx$300 sampled candidates in \holdTopOne\% of holdout choices (top-10: \holdTopTen\%).
+
+\paragraph{Developers value fit, but fit rarely separates candidates.}
+The small share of demand match is not because developers ignore it. In utility terms (\cref{tab:coef}), a
+candidate that matches the task of the author's earlier parents is worth as much as a \mrsTask-fold increase in
+$1+d$ (95\% CI \mrsTaskLo--\mrsTaskHi); one standard deviation of recent adoptions is worth an \mrsRec-fold increase,
+a major-organization publisher \mrsOrg-fold. Per unit, fit is valued highly. It explains little of the variation in
+choices because the two kinds of signal vary very differently across candidates: degree spans five orders of
+magnitude within a candidate set, whereas the match signals are coarse, and many candidates fit equally well. Among
+first adoptions with a demand signal, on average \tieMean{} sampled candidates tie at the highest match index, and
+what separates them is popularity. Fit narrows the field; popularity picks the winner.
+
+\paragraph{Quality.}
+Model-index benchmark scores are reported for well under 1\% of candidates, and their coefficient is small and, if
+anything, negative. This could mean that developers do not respond to quality, or only that quality is rarely
+measured in the card. The next subsection bounds the second possibility.
+
+\input{tables/tab_bounds}
+
+\subsection{How large could fit be?}
+\paragraph{An upper bound from hub fixed effects.}
+Adding fixed effects for the 500 most adopted parents, and counting them entirely as quality, is the most generous
+reading of quality: any fixed attribute of a hub, measured or not, would be credited to it. Under this reading fit
+would account for \feInQual\% of the in-sample gain and \feHoldQual\% of the holdout gain (\cref{tab:bounds}). Two
+observations show that the bound is far from tight. First, the fixed effects add almost nothing out of sample:
+the holdout gain moves from \holdGainNoFE{} to \holdGainFE{} nats per choice. In-sample, the fixed effects take
+over credit from the popularity features they are collinear with (the popularity share falls from \shPopularity\%
+to 51.0\%), but they predict future choices no better than the popularity signals already do. Second, external
+quality explains little of them: among the \extHubs{} hubs covered by the Open LLM Leaderboard v2, the
+noise-corrected share of fixed-effect variance explained by the leaderboard score (with size and re-distributor
+controls) is \extQ\%. Splitting the fixed-effect share accordingly, fit accounts for \extFitIn\% in-sample and
+\extFitHold\% on the holdout. Whatever makes a hub attractive beyond its observed popularity, it is mostly not what
+benchmarks measure.\todo{Caveat: leaderboard coverage is 118 of 500 hubs; discuss representativeness.}
+
+\paragraph{Is the demand-match share developer-specific demand?}
+Some of what looks like match could be common trends: if everyone is fine-tuning instruction-following text models
+in a given month, any developer's history will ``match'' the models that are popular that month. We replace each
+developer's demand with that of a donor, another author's first adoption in the same month and modality, and
+recompute the match features. On its own the donor's demand still accounts for \placeboAlone\% of the gain, so common
+trends are real. But when own and donor match enter the same model, own match keeps \jointOwn\% of the gain and the
+donor \jointDonor\%, and the own-match coefficients barely move (task history 1.93 vs.\ 1.90). The donor's demand
+competes with popularity, not with the developer's own demand: about \jointOwn\% of the gain is fit to a
+developer-specific need.
+
+\paragraph{Popularity without a quality difference.}
+The cleanest evidence that popularity signals act on their own comes from \idN{} first adoptions in which two copies
+of the same weights (identical weight hashes, published by different accounts) are both in the candidate set and
+one is chosen. Quality is identical by construction. The chosen copy is the one with more recent adoptions
+(coefficient \idRec, SE \idRecSe), not the one with more adoptions overall (\idDeg, SE \idDegSe; the chosen copy has
+the higher degree in \idHigher\% of cases): among exact substitutes, developers follow current momentum.
+
+\input{tables/tab_q}
+
+\subsection{Robustness to the candidate-set design}
+\label{sec:robustq}
+\Cref{tab:q} re-estimates the model with the same choices and features under three inclusion schemes: the main
+$(d+1)$ PPS design, a stratified design (all top-500 hubs plus random positive-degree and zero-degree models) and
+uniform sampling. PPS and stratified sets give the same answer: shares within one percentage point and coefficients
+within one standard error. Both contain the popular competitors, and the $-\log\pi$ correction handles the rest.
+
+Uniform sets give different weights. Almost every sampled competitor is a never-used model, so the chosen parent is
+easy to find (top-1 holdout accuracy \topOneUnif\%), but the choice is then mostly a comparison between ``known'' and
+``unknown'' models. On this margin the weights on organization brand, language history and the library ecosystem
+roughly double, $\1[d>0]$ falls from 4.64 to 3.25, and the match share rises to 8.4\%. Since all three designs
+recover the true parameters on synthetic data (\cref{sec:validation}), the difference is not an estimation
+artifact: a single logit cannot describe both the known-versus-unknown margin and the choice among popular models
+with the same weights. We take the PPS design as the main specification because it represents the comparisons
+developers actually make, among the incumbents of their modality.
+
+\paragraph{Other checks.}
+Demand match can only register where a demand signal exists; \sigShare\% of first adoptions have one (author
+history, dataset profile or card text). On these choices demand match accounts for \sigMatch\% of the gain
+(\sigMatchRw\% after reweighting them to the composition of all choices by author experience and organization), and
+popularity for \sigPop\%. Full-data estimates agree with an earlier analysis of a 10\% sample: \valIn{} of \valN{}
+coefficients lie in the 10\% confidence interval, and the exceptions are features redefined since
+(\cref{app:validation}).

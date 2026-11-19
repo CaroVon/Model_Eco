@@ -1,0 +1,69 @@
+\section{Data and Setting}
+\label{sec:data}
+
+\paragraph{The fine-tuning network.}
+We use a snapshot of the Hugging Face Hub with metadata and model cards for \nModels{} models by \nAuthorsAll{}
+accounts.\todo{Cite the snapshot source and its date.} A model card may declare a base model; the declaration and
+its type define a directed edge from the parent (base) to the child. Of the \nEdges{} edges, \nAdapter{} are
+adapters and \nFinetune{} full fine-tunes; the remainder are quantized copies and merges. We treat fine-tunes and
+adapters (and the few untyped declarations) as \emph{base-model choices}: a developer picked one existing model to
+build on. Quantized copies and merges are not choices of this kind; they enter only as attributes of the parent
+(e.g., how many quantized versions a candidate has). Creation timestamps are reliable from \tStart{} onward; older
+models are kept as part of the initial network, and every child created between \tStart{} and \tEnd{} contributes
+one choice per declared parent, \nChoices{} choices in total.
+
+\paragraph{From uploads to adoption decisions.}
+Many uploads are repeated variants of one decision: the same author fine-tunes the same base model several times
+within hours (checkpoints, hyper-parameter sweeps). We merge consecutive uploads by one author on one parent that
+are less than 24 hours apart into a \emph{decision} (\nDecisions{} decisions; 6- and 72-hour windows in
+\cref{app:repeat}). Our main sample is the first decision of each author--parent pair, a \emph{first adoption}:
+\nFirst{} first adoptions by \nFirstAuthors{} authors of \nFirstParents{} distinct parents. First adoptions are the
+decisions in which a developer selects a base model rather than continuing to use one; repeated use is a different
+behavior, which we analyze separately in \cref{app:repeat}. The \emph{market} for a first adoption is every model of
+the same modality (text, image generation, speech, vision, multimodal) created before the child, minus the parents
+the author has already used. Markets are large: the median first adoption faces \marketMedian{} alternatives, and
+\shareText\% of first adoptions are text models.
+
+\paragraph{A concentrated network.}
+Adoption is extremely concentrated. The single most adopted parent receives \topOneReal\% of all first adoptions,
+the ten most adopted receive \topTenReal\%, and the effective number of parents, $\exp(H)$ for the entropy $H$ of
+the adoption shares, is \effReal{} out of \nFirstParents{} parents ever adopted. Concentration is what popularity
+would produce, but also what a few models of exceptional general quality, or a few models that fit the most common
+needs, would produce. Separating these explanations is the purpose of the choice model.
+
+\paragraph{What a developer can see: four groups of signals.}
+For every (choice, candidate) pair we measure signals available to the developer at the time of the choice, from the
+network state and metadata strictly before the child's creation. We organize them into four groups
+(\cref{app:data} lists every feature):
+\begin{itemize}
+\item \textbf{Popularity}: signals that are the same for every developer and do not depend on what the developer
+needs: degree $d$ and $\1[d>0]$, adoptions in the last 30 days, age, a major-organization publisher, a legacy
+model (created before March 2022), the library ecosystem, the number of quantized versions, re-distributor accounts that republish
+other organizations' weights, co-use by other developers who trained on the same datasets or used the same niche
+parents, and whether size, card text or benchmark scores are available at all (documentation completeness is
+visibility, not demand).
+\item \textbf{General quality}: model-index benchmark scores reported in the card, standardized within benchmark
+(a z-score). Hub fixed effects, which absorb any unobserved quality, are used only to bound this group
+(\cref{sec:bounds}).
+\item \textbf{Demand match}: how well the candidate fits this developer's need. Need is read only from sources the
+child does not copy from its parent: the author's earlier parents (task, languages, size; the candidate itself left
+out), the languages and tasks common among other models trained on the child's declared datasets, and the TF-IDF
+similarity between the child's and the candidate's model cards.
+\item \textbf{Inertia}: the candidate is the author's own model, or belongs to a model family the author used before.
+\end{itemize}
+
+\paragraph{Guarding against copied metadata.}
+A child's card is partly inherited from its parent, so naive similarity between child and candidate would favor the
+true parent mechanically. We test each field for inheritance by comparing the child with its parent and with a
+random parent from the same month and modality (Cohen's $\kappa$, \cref{app:data}). Parameter count ($\kappa=0.84$)
+and license ($\kappa=0.74$) are mostly copied and are not used as demand; datasets ($\kappa=0.12$) are mostly the
+child's own. For dataset-based demand we additionally drop datasets the child shares with its chosen parent, compute
+each dataset's language and task profile only from models created before the choice, and remove the candidate's own
+children from the profile used for that candidate. For card text we drop template paragraphs (paragraphs in
+$\ge$20 cards, including near-duplicates found by MinHash), paragraphs copied from an earlier card, and organization
+and family names, so that a shared model name cannot produce similarity.
+
+\paragraph{Training and holdout.}
+We hold out the last 10\% of choices in time (children created on or after \tHold) for out-of-sample evaluation;
+\nTrain{} first adoptions are used for estimation. The fixed effects of \cref{sec:bounds} are assigned to the 500
+most adopted parents as of the holdout cut, so the set does not depend on future adoptions.

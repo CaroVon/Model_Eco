@@ -1,0 +1,50 @@
+\section{Repeated Choices}
+\label{app:repeat}
+
+\paragraph{Decisions.}
+Merging an author's consecutive uploads on one parent turns \nChoices{} choices into 226,542 / \nDecisions{} /
+176,526 decisions for windows of 6 / 24 / 72 hours; \nFirst{} of them are first adoptions of an author--parent pair
+and the rest are repeat decisions.
+
+\paragraph{Stay or switch.}
+Of the 75,016 first adoptions followed by another decision of the same author, 18.3\% stay with the parent at the
+next decision, 5.8\% move to a newer version of the same family and 76.0\% switch to another model. A logit of
+staying on the four group indices of the first parent (utility contributions under the main model), with controls
+for the time to the next decision, whether the next task is the same, a newer family release and author experience,
+gives positive dependence on the popularity index (0.056, SE 0.004) and negative dependence on the match index
+($-0.165$, SE 0.017); a same-task next decision (0.95) and a newer family release ($-0.71$) matter most. Results are
+similar for the same-task subsample, for staying within 180 days and with 6- and 72-hour windows.
+\todo{Interpretation of the negative match coefficient; author-FE conditional logit; table.}
+
+\paragraph{A two-nest model and why we do not rely on it.}
+A natural model of repeated choice puts the author's earlier parents in an ``old'' nest and the rest of the market in
+a ``new'' nest, with dissimilarity parameters $\lambda_{\text{old}}, \lambda_{\text{new}} \in (0,1]$. With a sampled new
+nest the inclusive value must be estimated by Horvitz--Thompson, $\log \sum_{l \in \D} e^{V_l / \lambda} / \pi_l$
+\citep{horvitz1952generalization}. On all \nDecisions{} decisions the estimates are $\hat\lambda_{\text{new}} =
+0.021$ and $\hat\lambda_{\text{old}} = 0.128$, which would imply that the nest choice depends only on the best
+alternative in each nest. A synthetic check with the same sampling design (\cref{tab:nestedcheck}) shows that
+$\lambda$ is not reliably identified at the scale of the Hub. With a market of 50,000 the true $\lambda$ is recovered;
+with 500,000 alternatives, close to the real median, a true $\lambda_{\text{new}} = 0.7$ is estimated at 0.10--0.47
+with standard errors around 0.25, and enlarging the sampled new nest tenfold does not help. In a very large market
+the new nest is chosen almost always, so the nest-level choice carries little information about $\lambda$. We
+therefore report the binary stay-or-switch model and do not interpret $\hat\lambda$.
+
+\begin{table}[h]
+\centering
+\caption{Synthetic recovery of $\lambda$ with a PPS-sampled new nest ($E|\D| = 300$ unless noted; 3,000 choices for
+markets of 300 and 50,000, 1,500 for 500,000).}
+\label{tab:nestedcheck}
+\small
+\begin{tabular}{rrrrr}
+\toprule
+Market & True $\lambda_{\text{new}}$ & Sample & $\hat\lambda_{\text{new}}$ (SE) & $\hat\lambda_{\text{old}}$ (SE) \\
+\midrule
+50,000 & 0.7 & 300 & 0.77 (0.12), 0.70 (0.15) & 0.64 (0.19), 0.22 (0.15) \\
+50,000 & 0.3 & 300 & 0.36 (0.02), 0.33 (0.02) & 0.40 (0.05), 0.36 (0.05) \\
+500,000 & 0.7 & 300 & 0.10 (0.25), 0.47 (0.26) & 0.15 (0.43), 0.11 (0.20) \\
+500,000 & 0.7 & 3,000 & 0.42 (0.26) & 0.09 (0.18) \\
+500,000 & 0.3 & 300 & 0.36 (0.04) & 0.36 (0.08) \\
+\bottomrule
+\end{tabular}
+\end{table}
+\todo{Generate this table from results/tables/v2/v2\_nested\_check.csv.}
