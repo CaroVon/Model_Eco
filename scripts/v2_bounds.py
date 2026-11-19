@@ -157,12 +157,51 @@ def part_placebo():
           "shares with the donor's demand-match features in place of the real ones (fix A check)")
 
 
+def part_placebo_joint():
+    """Own and donor (placebo) demand-match features in one model: the donor's match is a fifth Shapley player, so
+    the own match share is net of what any same-month same-modality demand would explain (common trends)."""
+    from hfpa.models.clogit import CLogit
+    rows, ch = load_rows(SPEC, "planA")
+    tr, _ = split(rows, ch)
+    P = []
+    for f in sorted(glob.glob(str(cdir(SPEC) / "feats_placebo" / "*.parquet"))):
+        if pq.read_schema(f).names:
+            P.append(pd.read_parquet(f))
+    P = pd.concat(P, ignore_index=True)
+    trp = tr[["choice_id", "cand_id"]].merge(P, on=["choice_id", "cand_id"], how="left")
+    keep = trp.has_donor.fillna(0).to_numpy() > 0
+    R = tr[keep].reset_index(drop=True)
+    pl = [f"pl_{c}" for c in GROUPS["match"]]
+    for c, q in zip(GROUPS["match"], pl):
+        R[q] = trp.loc[keep, c].to_numpy(np.float32)
+    groups = {**GROUPS, "placebo": pl}
+    feats = [f for f in ALL if f in R and R[f].std() > 0] + [q for q in pl if R[q].std() > 0]
+    D = to_buckets(R, feats)
+    fits = shapley_fits(D, feats, groups=groups, log=None)
+    sh, tot = shares(fits, list(groups))
+    out = [dict(group=NAMES.get(g, "placebo (donor) match"), share=v["share"], value=v["value"], total_gain=tot, n=D.n)
+           for g, v in sh.items()]
+    author = ch.author.loc[D.choice_ids].to_numpy()
+    res = CLogit(len(feats)).fit(D, cluster=author)
+    co = pd.DataFrame({"param": feats, "coef": res["coef"], "se_cl": res["se_cl"]})
+    co = co[co.param.isin(GROUPS["match"] + pl)]
+    write(pd.DataFrame(out), "v2_placebo_joint", "Own and donor demand match in one model: Shapley shares with the "
+          "donor's match as a fifth player (own match share net of common same-month demand)",
+          "Donor = another author's plan-A choice in the same month x modality (P20 design); "
+          "choices with a donor only.")
+    write(co.reset_index(drop=True), "v2_placebo_joint_coef", "Own vs donor demand-match coefficients in one model "
+          "(SE clustered by author)")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--ext", action="store_true")
     ap.add_argument("--placebo", action="store_true")
+    ap.add_argument("--placebo-joint", action="store_true")
     a = ap.parse_args()
     if a.ext:
         part_ext()
     if a.placebo:
         part_placebo()
+    if a.placebo_joint:
+        part_placebo_joint()
