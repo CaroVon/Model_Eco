@@ -1,0 +1,35 @@
+\section{Validation}
+\label{app:validation}
+
+\paragraph{Synthetic preferential attachment.}
+We grow synthetic networks of 8,000 nodes in which each new node attaches to an existing node with weight
+$d^{\alpha}$ if its degree $d$ is positive and $e^{\beta_0}$ otherwise ($\alpha = 1$, $\beta_0 = -1$), replay them with the same code as the real data and estimate
+$(\1[d>0], \log d)$ under each of the three sampling designs. In all three, $\hat\alpha$ lies within three standard
+errors of 1. The empirical inclusion frequency of each node under PPS matches $\pi$, and the expected set size
+matches $S$.
+
+\paragraph{Recovering simulated mechanisms.}
+For \cref{sec:validation} we keep every real candidate set and replace the chosen parent by a draw with probability
+proportional to $\exp(V_{kl} - \log \pi_{kl})$, where $V$ contains (a) only the popularity terms of the estimated
+model, (b) only quality, demand match and the externally explained part of the hub fixed effects, or (c) the full
+model with fixed effects. Re-running the four-group decomposition on these choices gives
+\recSfPop\% popularity for (a), \recQfFit\% fit for (b), and \recFullPop\% / \recFullMatch\% / \recFullInertia\%
+for (c). Because the candidate features are the real ones, the popularity and match signals keep their real
+correlation; (a) and (b) therefore do not reach 100\%.
+
+\paragraph{Full data versus a 10\% sample.}
+An earlier version of the analysis used a 10\% random sample of choices. \Cref{tab:validate} compares it with the
+full-data estimates under the stratified design (the design of the earlier analysis). \valIn{} of \valN{} coefficients
+lie inside the 95\% interval of the 10\% sample. The exceptions are features changed in the rebuild: major
+organization (the re-distributor flag now separates accounts that republish other organizations' weights), missing
+card text (new text pipeline) and features based on dataset profiles, which are now computed only from earlier models.
+
+\paragraph{Why standard errors shrink by less than $\sqrt{10}$.}
+With independent choices the full-data standard errors would be $\sqrt{0.1} \approx 0.32$ of the 10\% ones; the
+median ratio is \valSeRatio. Choices are clustered by author: the \nFirst{} first adoptions come from \nFirstAuthors{}
+authors, and a 10\% sample of choices keeps 15\% of the authors. Under clustering the variance scales with
+$\sum_a n_a^2 / N^2$, which bounds the ratio between 0.32 (independent choices within an author) and 0.89 (perfectly
+dependent choices); the observed value implies strong within-author dependence, which is why every interval in the
+paper is clustered or bootstrapped by author.
+
+\input{tables/tab_validate}

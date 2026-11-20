@@ -1,0 +1,47 @@
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Popularity, social learning and herding.}
+When quality is hard to observe, adopters rationally follow earlier adopters
+\citep{banerjee1992simple,bikhchandani1992theory}, and social influence makes success both more unequal and less
+predictable from quality \citep{salganik2006experimental}. Cumulative advantage in science has the same structure
+\citep{merton1968matthew}. Field experiments show that displaying popularity information shifts choices
+\citep{cai2009observational,tucker2011popularity}. In observational data, the central difficulty is that popularity
+is itself a signal of quality. We address it in three ways: by bounding quality with product-specific fixed effects,
+the largest share any unobserved fixed attribute could take; by measuring how much of that bound external benchmark
+scores account for; and by comparing identical copies of the same weights, where quality is held fixed by
+construction.
+
+\paragraph{Demand estimation with very large choice sets.}
+Conditional logit \citep{mcfadden1974conditional,train2009discrete} remains consistent when the likelihood is
+evaluated on a sample of the alternatives, provided the sampling probabilities enter as an offset
+\citep{mcfadden1978modelling}; related results cover semiparametric models \citep{fox2007semiparametric} and
+multivariate extreme-value models \citep{guevara2013sampling}. These results allow any positive sampling
+probabilities. Our setting, with hundreds of thousands of alternatives whose demand is concentrated on a few dozen,
+makes the choice of design consequential. We sample with probability proportional to degree plus one, so that the
+incumbents developers actually weigh are present in every choice set, and we show that a uniform design changes the
+estimated weights and does not only widen the intervals.
+
+\paragraph{Network formation as discrete choice.}
+Preferential attachment explains heavy-tailed degree distributions by new nodes linking to existing nodes in
+proportion to their degree \citep{price1976general,barabasi1999emergence}. Fitness models add a node-specific
+attractiveness that lets late entrants overtake incumbents \citep{bianconi2001competition,wang2013quantifying}, and
+empirical work measures the attachment kernel from the timing of new links
+\citep{newman2001clustering,jeong2003measuring}. In economics, \citet{jackson2007meeting} show how a mix of random
+and network-based search produces such degree distributions, and econometric models of network formation estimate
+link preferences from observed networks \citep{graham2017econometric,depaula2020econometric}.
+\citet{overgoor2019choosing} show that the physics mechanisms are conditional-logit models in which each new edge is a
+choice among the existing nodes, so that degree, fitness, homophily and triadic closure can be estimated jointly and
+compared by likelihood; importance sampling extends this to large graphs \citep{overgoor2020scaling}. We build on this
+framework. We compare mechanisms with a Shapley decomposition of the likelihood gain instead of a sequence of nested
+models, and we use the estimated utility to grow counterfactual networks.
+
+\paragraph{AI model ecosystems.}
+Foundation models are adapted rather than trained from scratch \citep{bommasani2021opportunities}, which makes the
+choice of a base model a consequential and recurring decision. Descriptive studies of the Hugging Face Hub document
+its growth, its family trees and the concentration of downstream use on a few model families
+\citep{osborne2024ai,laufer2025anatomy}. In machine learning, base-model choice is usually framed as a prediction
+problem: transferability estimators such as LEEP and LogME rank pre-trained models by how well they are expected to
+fine-tune on a target task \citep{nguyen2020leep,you2021logme}. Our question is complementary and behavioral. We ask
+not which model a developer \emph{should} choose but which signals the choices developers actually make respond to,
+and what kind of market those choices grow.

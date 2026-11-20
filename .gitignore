@@ -7,3 +7,6 @@ __pycache__/
 external/choose2grow/
 *.parquet
 *.out
+
+# Overleaf upload bundles
+*_overleaf.zip

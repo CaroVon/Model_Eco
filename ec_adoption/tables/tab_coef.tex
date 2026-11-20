@@ -1,0 +1,45 @@
+\begin{table}[h]
+\centering
+\caption{Conditional-logit coefficients, main specification (no FE). SE clustered by author; 95\% multiplier-bootstrap interval (200 replicates). Last column: the factor on $(1+d)$ that is worth the same utility as a one-SD (binary: 0$\to$1) change of the feature.}
+\label{tab:coef}
+\scriptsize
+\begin{tabular}{lrrcr}
+\toprule
+Feature & Coef. & SE & 95\% CI & $(1{+}d)$ multiple \\
+\midrule
+\multicolumn{5}{l}{\textit{Popularity}} \\
+\texttt{log\_deg} & 0.344 & 0.012 & [0.319, 0.364] & -- \\
+\texttt{lrec30} & 0.605 & 0.015 & [0.582, 0.637] & 8.49 \\
+\texttt{major\_org} & 0.650 & 0.031 & [0.591, 0.711] & 6.61 \\
+\texttt{has\_deg} & 4.637 & 0.081 & [4.468, 4.769] & 7.05e+05 \\
+\texttt{legacy} & 1.386 & 0.034 & [1.321, 1.444] & 55.9 \\
+\texttt{log\_age} & -0.539 & 0.021 & [-0.577, -0.498] & 0.16 \\
+\texttt{size\_na} & -0.757 & 0.030 & [-0.815, -0.708] & 0.111 \\
+\texttt{txt\_na} & -0.439 & 0.087 & [-0.597, -0.298] & 0.28 \\
+\texttt{bench\_na} & -0.094 & 0.054 & [-0.203, 0.003] & 0.76 \\
+\texttt{lco2} & 0.842 & 0.097 & [0.601, 0.985] & 1.26 \\
+\texttt{ds\_couse} & 1.121 & 0.019 & [1.081, 1.154] & 1.55 \\
+\texttt{lquant} & 0.079 & 0.008 & [0.062, 0.091] & 1.23 \\
+\texttt{lib\_transformers} & 0.203 & 0.033 & [0.146, 0.270] & 1.8 \\
+\texttt{lib\_peft} & -1.801 & 0.169 & [-2.313, -1.559] & 0.00535 \\
+\texttt{lib\_diffusers} & 0.594 & 0.153 & [0.246, 0.839] & 5.61 \\
+\texttt{lib\_sentence-transformers} & 0.974 & 0.045 & [0.876, 1.072] & 16.9 \\
+\texttt{redistributor} & 0.741 & 0.040 & [0.644, 0.813] & 8.61 \\
+\midrule
+\multicolumn{5}{l}{\textit{Quality}} \\
+\texttt{bench\_z} & -0.116 & 0.025 & [-0.160, -0.059] & 0.971 \\
+\midrule
+\multicolumn{5}{l}{\textit{Demand match}} \\
+\texttt{size\_dist} & -0.221 & 0.015 & [-0.246, -0.197] & 0.674 \\
+\texttt{task\_hist} & 1.896 & 0.046 & [1.808, 1.973] & 246 \\
+\texttt{lang\_hist} & 0.251 & 0.036 & [0.195, 0.308] & 2.07 \\
+\texttt{ds\_lang} & 0.355 & 0.055 & [0.260, 0.459] & 2.8 \\
+\texttt{ds\_task} & 0.883 & 0.109 & [0.746, 1.148] & 13 \\
+\texttt{txt\_sim} & 1.687 & 2.078 & [-1.088, 4.529] & 1.15 \\
+\midrule
+\multicolumn{5}{l}{\textit{Inertia}} \\
+\texttt{author\_family} & 0.052 & 0.059 & [-0.086, 0.146] & 1.16 \\
+\texttt{same\_author} & 7.061 & 0.373 & [6.337, 7.891] & 8.06e+08 \\
+\bottomrule
+\end{tabular}
+\end{table}

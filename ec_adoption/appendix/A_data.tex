@@ -1,0 +1,78 @@
+\section{Data and Features}
+\label{app:data}
+
+\paragraph{Network construction.}
+Nodes are models; an edge $p \to c$ is a base-model declaration in the card of $c$. We drop edges whose child was
+created before its parent and equal-timestamp edges outside the pre-2022 backfill, and keep deleted parents with at
+least 100 children as placeholder nodes. Creation times up to March 2, 2022 are backfilled in the source data; models
+created up to that date are \emph{legacy} models, part of the initial network, and are given that date as their
+creation time. A choice is an edge of type fine-tune, adapter or untyped whose child is created after that date and
+whose parent has the child's modality; modality is taken from the pipeline tag, else from the parent, else from the
+library.
+
+\paragraph{Features.}
+All features of choice $k$ use only models and edges created strictly before the child of $k$. ``History'' is the
+set of parents the author adopted before $k$, with the candidate itself left out.
+
+\begin{center}
+\scriptsize
+\begin{tabular}{llp{0.62\textwidth}}
+\toprule
+Group & Feature & Definition \\
+\midrule
+Popularity & \texttt{log\_deg}, \texttt{has\_deg} & $\log \max(d,1)$ and $\1[d>0]$, $d$ = number of earlier fine-tune/adapter children \\
+ & \texttt{lrec30} & $\log(1+{}$children in the last 30 days$)$ \\
+ & \texttt{log\_age} & $\log(1+{}$age in days$)$ \\
+ & \texttt{major\_org} & published by one of a fixed list of large AI organizations \\
+ & \texttt{legacy} & created before March 2, 2022 \\
+ & \texttt{lquant} & $\log(1+{}$quantized children$)$ \\
+ & \texttt{lib\_*} & library: transformers, peft, diffusers, sentence-transformers \\
+ & \texttt{redistributor} & published by an account whose models are mostly copies of other organizations' models ($\ge$20 copies, $\ge$50\% of its models) \\
+ & \texttt{ds\_couse} & $\log(1+{}$earlier models by other authors, trained on one of the child's datasets, that chose the candidate$)$ \\
+ & \texttt{lco2} & $\log(1+{}$distinct other authors who share a niche parent with the author and used the candidate$)$; niche = outside the month's top-500 \\
+ & \texttt{size\_na}, \texttt{txt\_na}, \texttt{bench\_na} & candidate size (or the author's size history), usable card text, or benchmark score missing \\
+\midrule
+Quality & \texttt{bench\_z} & model-index benchmark score in the candidate's card, z-scored within benchmark (0 if missing) \\
+\midrule
+Demand match & \texttt{task\_hist} & candidate's pipeline task appears in the author's history \\
+ & \texttt{lang\_hist} & candidate shares a language with the author's history \\
+ & \texttt{size\_dist} & $|\log \text{params}(j) - \text{median} \log \text{params}(\text{history})|$ \\
+ & \texttt{ds\_lang}, \texttt{ds\_task} & candidate's language / task is common ($\ge$30\%) among other models trained on the child's datasets (profiles as of the choice; datasets shared with the chosen parent dropped; the candidate's own children removed) \\
+ & \texttt{txt\_sim} & TF-IDF cosine between child and candidate cards after template, copy and name removal; 0 unless both have $\ge$5 tokens \\
+\midrule
+Inertia & \texttt{same\_author} & candidate published by the choosing author \\
+ & \texttt{author\_family} & candidate in a model family (root) the author used before \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Inheritance check.}
+For each metadata field we compare the child with its parent and with a random parent of another choice in the same
+modality and month (\cref{tab:inherit}). Fields with high excess agreement are inherited and cannot measure the
+developer's demand; demand match therefore uses the author's history, dataset profiles and cleaned card text only.
+
+\begin{table}[h]
+\centering
+\caption{Inheritance of card metadata, first adoptions: agreement between child and parent, between child and a
+random parent (chance), and Cohen's $\kappa$.}
+\label{tab:inherit}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Field & Both declare & Identical & Chance & $\kappa$ \\
+\midrule
+Parameter count & 0.25 & 0.86 & 0.11 & 0.84 \\
+License & 0.73 & 0.83 & 0.35 & 0.74 \\
+Languages & 0.23 & 0.75 & 0.55 & 0.44 \\
+Pipeline task & 0.57 & 0.69 & 0.52 & 0.34 \\
+Datasets & 0.08 & 0.13 & 0.01 & 0.12 \\
+Library & 0.90 & 0.68 & 0.65 & 0.07 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Card text.}
+We clean 1,062,460 cards. A paragraph is a template if it (or a MinHash near-duplicate, 5-word shingles, Jaccard
+$\ge 0.8$) appears in at least 20 cards; it is copied if it appears in a card created no later than the child's.
+Organization and family names (the first token of a repository name) and tokens with digits are removed. After
+cleaning, 18\% of child cards keep at least 5 tokens, the threshold for \texttt{txt\_sim}.

@@ -1,0 +1,17 @@
+\begin{table}[t]
+\centering
+\caption{How large could fit be? Fit = general quality + demand match. Hub FE: 500 hub-specific intercepts (top-500 by degree at the holdout cut). External quality explains 7.3\% of the FE variance among the 118 hubs covered by the Open LLM Leaderboard v2 (noise-corrected, with redistributor and size controls).}
+\label{tab:bounds}
+\small
+\begin{tabular}{lrr}
+\toprule
+Specification & Fit (\%) & Popularity (\%) \\
+\midrule
+No FE; quality = benchmark z-score & 5.2 & 91.6 \\
+Hub FE counted as quality (in-sample) & 46.0 & 51.0 \\
+Hub FE counted as quality (holdout) & 36.2 & 60.3 \\
+Externally explained part of FE (in-sample) & 7.0 & 89.9 \\
+Externally explained part of FE (holdout) & 6.3 & 90.2 \\
+\bottomrule
+\end{tabular}
+\end{table}

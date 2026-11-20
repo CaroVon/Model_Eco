@@ -1,0 +1,29 @@
+\section{Sampling Correction}
+\label{app:sampling}
+
+\paragraph{Proof of \cref{prop:pps}.}
+Fix choice $k$ and drop the index. Every $l \neq j$ enters $\D$ independently with probability $\pi_l$, and the
+chosen $j$ is always included. Given that $j$ was chosen, the probability of a set $\D \ni j$ is
+$q(\D \mid j) = \prod_{l \in \D \setminus \{j\}} \pi_l \prod_{l \notin \D} (1 - \pi_l)$. Hence for $j, l \in \D$,
+$q(\D \mid j) / q(\D \mid l) = \pi_l / \pi_j$. By Bayes' rule
+\begin{equation*}
+P(j \mid \D) = \frac{P(j)\, q(\D \mid j)}{\sum_{l \in \D} P(l)\, q(\D \mid l)}
+= \frac{e^{\theta^\top x_j}\, q(\D \mid j)}{\sum_{l \in \D} e^{\theta^\top x_l}\, q(\D \mid l)}
+= \frac{e^{\theta^\top x_j - \log \pi_j}}{\sum_{l \in \D} e^{\theta^\top x_l - \log \pi_l}},
+\end{equation*}
+which is \eqref{eq:corrected}. The conditional likelihood is a correctly specified likelihood for the observed
+$(j_k, \D_k)$, and $q(\D \mid j) > 0$ for every $j \in \D$ (positive conditioning), so the usual M-estimation
+argument gives consistency \citep{mcfadden1978modelling,train2009discrete}. \hfill$\square$
+
+\paragraph{Solving for $c_k$.}
+Let $n_0$ be the number of degree-0 models in the market and $n_\delta$ the number with degree $\delta > 0$. Then
+$\sum_l \pi_l = n_0 \min(1,c) + \sum_\delta n_\delta \min\{1, c(\delta + 1)\}$ is piecewise linear and increasing in
+$c$. Sorting the positive degrees in decreasing order, the top $m$ degree classes are saturated ($\pi=1$) and
+$c = (S - \sum_{i \le m} n_{\delta_i}) / (n_0 + \sum_{i > m} n_{\delta_i} (\delta_i + 1))$ for the unique $m$ at which
+this $c$ saturates exactly the top $m$ classes. The histogram is maintained incrementally, so $c_k$ costs one pass
+over the distinct degrees. Degree-0 models are drawn as a binomial count followed by rejection sampling.
+
+\paragraph{Author history and plan A.}
+The candidate sets also contain the author's earlier parents with $\pi = 1$ (used for repeated choices,
+\cref{app:repeat}). For first adoptions these rows are removed, consistent with defining the market as the models the
+author has not used.

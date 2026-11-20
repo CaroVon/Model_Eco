@@ -1,0 +1,15 @@
+\section{Growing Counterfactual Networks}
+\label{sec:growth}
+\todo{Results are in (results/tables/v2/v2\_grow.md, v2\_grow\_recovery.md); the over-concentration diagnosis is
+pending. Planned content:
+(i) The growth simulator: the real event sequence (who adopts, when, in which modality) is kept; parents are redrawn
+from PPS sets built on simulated degrees; all 26 features are recomputed against the simulated state (exact replay
+of the estimation features as a check).
+(ii) Networks: SF (popularity only), QF (quality and match only), EST (estimated utility), each with and without
+hub fixed effects, 5 seeds. Effective number of parents: SF 439, EST 509, real 837, QF 114,605. With FE: SF 400,
+EST 429. EST lies between SF and QF and much closer to SF.
+(iii) Share recovery on the grown networks: SF 98.5\% popularity; QF 92.5\% demand match; EST 94.3\% / 4.7\% /
+0.9\% (popularity / match / inertia).
+(iv) Feedback over-concentrates relative to the real network (top-10 share 0.31--0.39 against 0.22). Candidate
+explanation: exogenous entry of new model generations.
+(v) Counterfactual that scales the popularity weights.}
