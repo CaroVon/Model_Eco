@@ -327,8 +327,114 @@ def part_nested():
     pickle.dump(dict(res=res, X=X), open(cdir(SPEC) / "v2_est" / "nested.pkl", "wb"))
 
 
+# ---------------------------------------------------------------- v2.1: by author type (E)
+STRATA = {"all": None, "individuals (light + mid)": ["indiv_light", "indiv_mid"], "indiv_light": ["indiv_light"],
+          "indiv_mid": ["indiv_mid"], "indiv_heavy": ["indiv_heavy"],
+          "organisations": ["org_major", "org_redistributor", "org_other"]}
+
+
+def part_bytype():
+    """Stay / switch by author type (scripts/v2_authors.py), five indices (inertia split into self-supply =
+    same_author and habit = author_family; same full model, so I_self + I_habit = I_inertia). Per stratum: pooled
+    logit, author-FE conditional logit, stay / upgrade / switch MNL, satisfaction test. Welfare (retention): Delta
+    Pr(stay) = beta_match * fit_gap * p(1 - p) with the author-FE beta of the stratum (classify.parquet fit gaps)."""
+    import statsmodels.api as sm
+    from statsmodels.discrete.conditional_models import ConditionalLogit
+    n, m = node_info()
+    idx = chosen_indices()
+    C = pickle.load(open(cdir(SPEC) / "v2_est" / "clogit.pkl", "rb"))
+    feats, b = C["feats"], C["nofe"]["coef"]
+    X = pd.concat([pd.read_parquet(f, columns=["choice_id", "chosen", "same_author", "author_family"],
+                                   filters=[("chosen", "==", 1)])
+                   for f in sorted(glob.glob(str(cdir(SPEC) / "feats" / "*.parquet")))
+                   if not f.endswith(".notext.parquet") and pq.read_schema(f).names]).set_index("choice_id")
+    idx["I_self"] = X.same_author.reindex(idx.index).to_numpy(float) * b[feats.index("same_author")]
+    idx["I_habit"] = (X.author_family.reindex(idx.index).to_numpy(float) * b[feats.index("author_family")]
+                      if "author_family" in feats else 0.0)
+    assert np.allclose(idx.I_self + idx.I_habit, idx.I_inertia, atol=1e-6)
+    AT = pd.read_parquet(paths.INTERIM / "v2_author_types.parquet").set_index("author_code").atype
+    s0 = binary_sample(24, n, m, idx)
+    s0 = s0.loc[:, ~s0.columns.duplicated()]
+    s0["atype"] = s0.author.map(AT)
+    fx = pd.get_dummies(s0[["modality", "half"]].astype(str), drop_first=True, dtype=float)
+    s0 = pd.concat([s0, fx], axis=1)
+    FX = list(fx.columns)
+    IV = ["I_pop", "I_qual", "I_match", "I_self", "I_habit"]
+    CTRL = ["lgap", "same_task", "new_version", "lexp"]
+    K = pd.read_parquet(cdir(SPEC) / "v2_est" / "classify.parquet").set_index("choice_id")
+    ch = pd.read_parquet(cdir(SPEC) / "decisions.parquet", columns=["choice_id", "author"]).set_index("choice_id")
+    K["atype"] = ch.author.reindex(K.index).map(AT)
+    out, summ, wel = [], [], []
+    for name, types in STRATA.items():
+        s = s0 if types is None else s0[s0.atype.isin(types)]
+        if len(s) < 500:
+            log(f"{name}: n {len(s)} too small, skipped")
+            continue
+        IVu = [v for v in IV if s[v].std() > 0]
+        specs = [("logit", "R", s, IVu + CTRL + FX),
+                 ("logit + child outcome (satisfaction)", "R", s, IVu + CTRL + ["child_kids", "child_likes"] + FX)]
+        for mname, y, df, Xs in specs:
+            Xs = [x for x in Xs if df[x].std() > 0]
+            try:
+                r = logit_cl(df, y, Xs, "author")
+            except Exception as e:  # noqa: BLE001  (perfect separation in a small stratum)
+                log(f"{name} {mname}: {e}")
+                continue
+            for v in IVu + ["child_kids", "child_likes"] + CTRL:
+                if v in r.params:
+                    out.append(dict(stratum=name, model=mname, var=v, coef=r.params[v], se=r.bse[v], z=r.tvalues[v],
+                                    n=int(r.nobs), authors=df.author.nunique(), mean_y=df[y].mean()))
+        v = s.groupby("author").R.transform(lambda x: x.nunique() > 1)
+        sf = s[v]
+        bfe = {}
+        if len(sf) > 200:
+            Xc = [x for x in IVu + CTRL if sf[x].std() > 0]
+            rc = ConditionalLogit(sf.R.to_numpy(float), sf[Xc].astype(float).to_numpy(),
+                                  groups=sf.author.to_numpy()).fit(disp=0)
+            for i, x in enumerate(Xc):
+                out.append(dict(stratum=name, model="conditional logit, author FE", var=x, coef=rc.params[i],
+                                se=rc.bse[i], z=rc.params[i] / rc.bse[i], n=len(sf), authors=sf.author.nunique(),
+                                mean_y=sf.R.mean()))
+                bfe[x] = (rc.params[i], rc.bse[i])
+        Xm = [x for x in IVu + CTRL if s[x].std() > 0]
+        try:
+            mn = sm.MNLogit(s.y3.to_numpy(), sm.add_constant(s[Xm].astype(float))).fit(
+                disp=0, maxiter=300, cov_type="cluster", cov_kwds={"groups": pd.factorize(s.author)[0]})
+            for k, lab in ((0, "upgrade vs stay"), (1, "switch vs stay")):
+                for x in IVu:
+                    out.append(dict(stratum=name, model=f"MNL: {lab}", var=x, coef=mn.params.iloc[:, k][x],
+                                    se=mn.bse.iloc[:, k][x], z=mn.tvalues.iloc[:, k][x], n=int(mn.nobs),
+                                    authors=s.author.nunique(), mean_y=np.nan))
+        except Exception as e:  # noqa: BLE001
+            log(f"{name} MNL: {e}")
+        summ.append(dict(stratum=name, pairs=len(s), authors=s.author.nunique(), stay=(s.y3 == 0).mean(),
+                         upgrade=(s.y3 == 1).mean(), switch=(s.y3 == 2).mean(), R180=s.R180.mean(),
+                         fe_sample=len(sf), fe_authors=sf.author.nunique()))
+        # retention welfare with the stratum's author-FE beta_match
+        if "I_match" in bfe:
+            Kk = K if types is None else K[K.atype.isin(types)]
+            pbar = s.R.mean()
+            bm, sem = bfe["I_match"]
+            gap = Kk.fit_gap.to_numpy()
+            mism = gap > 1e-9
+            for unit, g in (("per mismatched choice", gap[mism]), ("per choice", gap)):
+                v = bm * np.nanmean(g) * pbar * (1 - pbar)
+                wel.append(dict(stratum=name, unit=unit, beta_match_fe=bm, se_beta=sem, mean_fit_gap=np.nanmean(g),
+                                pbar=pbar, d_pr_stay=v, se=abs(sem * np.nanmean(g) * pbar * (1 - pbar)),
+                                rel_to_pbar=v / pbar, n_choices=len(g)))
+        log(f"{name}: pairs {len(s)}, FE sample {len(sf)}")
+    write(pd.DataFrame(out), "v2s_retention_bytype", "E: stay or switch by author type (24h decisions; five indices of "
+          "the parent at its first adoption; SE clustered by author)",
+          "I_self = same_author part, I_habit = author_family part of the former inertia index. Strata: author types of "
+          "scripts/v2_authors.py.")
+    write(pd.DataFrame(summ), "v2s_retention_bytype_outcomes", "E: next-decision outcomes by author type")
+    write(pd.DataFrame(wel), "v2s_retention_welfare", "E: retention gain from choosing the best-matched candidate, "
+          "author-FE beta_match of each stratum (Delta Pr(stay) = beta * fit_gap * p(1-p); SE by the delta method "
+          "on beta only)")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", required=True, choices=["sessions", "binary", "nested"])
+    ap.add_argument("--part", required=True, choices=["sessions", "binary", "nested", "bytype"])
     a = ap.parse_args()
-    {"sessions": part_sessions, "binary": part_binary, "nested": part_nested}[a.part]()
+    {"sessions": part_sessions, "binary": part_binary, "nested": part_nested, "bytype": part_bytype}[a.part]()

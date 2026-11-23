@@ -4,6 +4,7 @@ Samples (rows from processed/choices/<spec>/feats/*.parquet, choices from decisi
   planA      first decision of each author-parent pair; the author's earlier parents (author_reuse = 1, the
              certainty stratum H_k) are removed from the choice set (a first choice cannot be a reuse).
   decisions  every first upload of a 24h decision (v2_pps only): first and repeat decisions, H_k kept.
+  uploads    every choice (no session merge), H_k kept (v2.1).
 Train = choices before the train / holdout cut (decisions.holdout False); holdout = after.
 """
 import glob
@@ -31,24 +32,41 @@ def load_choices(spec):
     return pd.read_parquet(cdir(spec) / "decisions.parquet").set_index("choice_id", drop=False)
 
 
-def load_rows(spec, sample="planA", cols=None, extra=()):
+def load_rows(spec, sample="planA", cols=None, extra=(), selfdeg=False):
+    """sample: planA | decisions | uploads (every choice, no session merge, H_k kept).
+    selfdeg: replace log_deg / has_deg / lrec30 by the versions net of the author's own earlier children
+    (processed/choices/<spec>/feats_self, scripts/v2_selfdeg.py); identical on planA by construction."""
+    from hfpa.features.groups import SELFDEG
     ch = load_choices(spec)
-    ids = ch.index[ch.pair_first.to_numpy()] if sample == "planA" else ch.index[ch.dfirst24.to_numpy()]
+    sel = {"planA": ch.pair_first, "decisions": ch.dfirst24, "uploads": pd.Series(True, index=ch.index)}[sample]
+    ids = ch.index[sel.to_numpy()]
     cols = list(dict.fromkeys(BASE_COLS + (cols or ALL + SIGNAL) + ["author_reuse"] + list(extra)))
     parts = []
     dev = os.environ.get("V2_DEV_GLOB")  # development only: e.g. "2023-0[1-3].notext.parquet"
-    for f in sorted(glob.glob(str(cdir(spec) / "feats" / (dev or "*.parquet")))):
+    subs = ["feats", "feats_up"] if sample == "uploads" else ["feats"]
+    files = [f for sub in subs for f in sorted(glob.glob(str(cdir(spec) / sub / (dev or "*.parquet"))))]
+    for f in files:
         if f.endswith(".notext.parquet") and not dev:
             continue
         have = pq.read_schema(f).names
         if not have:
             continue
         x = pd.read_parquet(f, columns=[c for c in cols if c in have])
+        if selfdeg:
+            sdir = "feats_self_up" if os.path.basename(os.path.dirname(f)) == "feats_up" else "feats_self"
+            s = pd.read_parquet(cdir(spec) / sdir / os.path.basename(f), columns=list(SELFDEG.values())
+                                + ["choice_id", "cand_id"])
+            assert len(s) == len(x) and np.array_equal(s.cand_id.to_numpy(), x.cand_id.to_numpy()), f
+            for a, b in SELFDEG.items():
+                if a in x:
+                    x[a] = s[b].to_numpy(x[a].dtype)
         x = x[x.choice_id.isin(ids)]
         if sample == "planA":
             x = x[x.author_reuse.to_numpy() == 0]
         parts.append(x)
     rows = pd.concat(parts, ignore_index=True)
+    if sample == "uploads":
+        rows = rows.sort_values("choice_id", kind="stable").reset_index(drop=True)
     ok = rows.groupby("choice_id").chosen.transform("max").to_numpy() == 1
     rows = rows[ok].reset_index(drop=True)
     assert np.all(np.diff(rows.choice_id.to_numpy()) >= 0)

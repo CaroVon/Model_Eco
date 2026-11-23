@@ -20,7 +20,14 @@ GROUPS = {
     "inertia": ["author_reuse", "author_family", "same_author", "is_last"],
 }
 ALL = sum(GROUPS.values(), [])
-NAMES = {"pop": "popularity", "qual": "general quality", "match": "demand match", "inertia": "inertia"}
+NAMES = {"pop": "popularity", "qual": "general quality", "match": "demand match", "inertia": "inertia",
+         "self": "self-supply", "habit": "habit"}
+# v2.1: the inertia group split into self-supply (the candidate is the author's own model: an organisational /
+# vertical-integration choice) and habit (reusing a parent or family the author used before, last parent).
+GROUPS5 = {"pop": GROUPS["pop"], "qual": GROUPS["qual"], "match": GROUPS["match"], "self": ["same_author"],
+           "habit": ["author_reuse", "author_family", "is_last"]}
+# popularity columns that count the author's own earlier children on repeat decisions (scripts/v2_selfdeg.py)
+SELFDEG = {"log_deg": "log_deg_ex", "has_deg": "has_deg_ex", "lrec30": "lrec30_ex"}
 SIGNAL = ["hist_has", "ds_has", "txt_has"]  # the choice carries a demand signal
 MIN_TOKENS = 5
 MAIN = ["finetune", "adapter", "unspecified"]

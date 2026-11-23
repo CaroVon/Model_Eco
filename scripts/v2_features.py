@@ -8,6 +8,7 @@
               Shared indices -> interim/v2_idx/ (node attributes, time-indexed dataset profiles, co-use index, author
               histories, redistributor flags). Writes processed/choices/SPEC/decisions.parquet.
 --month SPEC YYYY-MM   features of the featurised choices of the month -> processed/choices/SPEC/feats/YYYY-MM.parquet
+              (V2_COMPLEMENT=1: the other choices, i.e. later uploads of a 24h session -> feats_up/, v2.1 sample U)
 --check SPEC  row counts, exactly one chosen, feature summary -> results/tables/v2/features_SPEC.md
 usage: sbatch slurm/cpu.sbatch scripts/v2_features.py --prep v2_pps
        sbatch --array=0-40 slurm/cpu.sbatch scripts/v2_features.py --month v2_pps   (task id -> month)
@@ -158,10 +159,11 @@ def month(spec, mon):
     t0 = time.time()
     d = cdir(spec)
     ch = pd.read_parquet(d / "decisions.parquet").set_index("choice_id", drop=False)
-    keep = ch.index[ch.featurise.to_numpy()]
+    comp = bool(os.environ.get("V2_COMPLEMENT"))  # v2.1: the non-featurised uploads (later uploads of a session)
+    keep = ch.index[~ch.featurise.to_numpy() if comp else ch.featurise.to_numpy()]
     rows = pd.read_parquet(d / "rows" / f"{mon}.parquet")
     rows = rows[rows.choice_id.isin(keep)].reset_index(drop=True)
-    out = d / "feats" / f"{mon}.parquet"
+    out = d / ("feats_up" if comp else "feats") / f"{mon}.parquet"
     out.parent.mkdir(exist_ok=True)
     if os.environ.get("V2_SKIP_TEXT"):
         out = out.with_suffix(".notext.parquet")
