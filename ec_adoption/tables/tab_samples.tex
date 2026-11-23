@@ -1,0 +1,27 @@
+\begin{table}[t]
+\centering
+\caption{Shapley shares (\%, in-sample, no FE) by sample, weights and author type; 95\% multiplier-bootstrap intervals by author.}
+\label{tab:samples}
+\small
+\begin{tabular}{lrrrrrrr}
+\toprule
+Sample & Choices & Authors & Popularity & Fit & Self-supply & Habit & Fit/Pop \\
+\midrule
+First adoptions (main) & 117,509 & 61,635 & 91.6 [91.1, 91.9] & 5.2 [5.0, 5.5] & 2.9 & 0.3 & 0.057 \\
+First adoptions, top 1\% of authors dropped & 89,305 & 60,957 & 94.2 [94.0, 94.3] & 3.5 [3.4, 3.5] & 2.1 & 0.3 & 0.037 \\
+First adoptions, authors weighted equally & 117,509 & 61,635 & 97.0 [96.9, 97.0] & 1.8 [1.7, 1.8] & 1.1 & 0.1 & 0.018 \\
+All 24h decisions & 176,061 & 61,670 & 73.1 [72.2, 73.6] & 3.1 [3.0, 3.4] & 1.9 & 21.9 & 0.043 \\
+All 24h decisions, authors weighted equally & 176,061 & 61,670 & 90.4 [90.2, 90.5] & 1.0 [1.0, 1.0] & 0.9 & 7.7 & 0.011 \\
+All 24h decisions, top 1\% dropped & 117,252 & 60,985 & 79.4 [79.1, 79.6] & 1.7 [1.7, 1.8] & 1.7 & 17.2 & 0.022 \\
+All uploads (no session merge) & 381,311 & 61,670 & 51.4 [49.8, 52.7] & 2.4 [2.2, 2.7] & 0.8 & 45.4 & 0.048 \\
+\midrule
+\multicolumn{8}{l}{\emph{First adoptions by author type}} \\
+Individuals, $<$10 models & 60,972 & 49,758 & 97.1 [97.0, 97.1] & 2.0 [2.0, 2.1] & 0.8 & 0.1 & 0.021 \\
+Individuals, 10--99 models & 25,524 & 8,428 & 85.2 [84.6, 85.6] & 7.8 [7.6, 8.1] & 6.0 & 0.9 & 0.092 \\
+Individuals, $\ge$100 models & 21,753 & 762 & 82.9 [81.2, 84.4] & 11.2 [10.7, 11.8] & 5.4 & 0.5 & 0.135 \\
+Other organizations & 6,964 & 2,474 & 82.8 [80.1, 84.1] & 10.4 [9.5, 12.6] & 5.8 & 1.0 & 0.126 \\
+Re-distribution accounts & 2,042 & 179 & 83.8 [79.2, 86.5] & 14.8 [12.3, 18.4] & 0.5 & 0.9 & 0.176 \\
+Major organizations & 254 & 34 & 58.8 [52.5, 67.9] & 17.3 [15.8, 19.0] & 21.5 & 2.3 & 0.295 \\
+\bottomrule
+\end{tabular}
+\end{table}
