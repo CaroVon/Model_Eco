@@ -189,12 +189,64 @@ $$
 - **Horvitz–Thompson：** $\sum_{l\in\mathcal D}e^{V_l}/\pi_l$ 是全市场分母 $\sum_{l\in\mathcal M}e^{V_l}$ 的无偏估计。抽中概率低的候选代表更多没被抽中的同类。
 - **基准模型：** 在 $\theta=0$ 时，(3) 给每个抽中的候选权重 $1/\pi$。也就是说，"均匀连接"在抽样后仍然是"全市场每个模型等概率"。所以似然增益 $\ell(\hat\theta)-\ell(0)$ 有清楚的含义（§5、§6）。
 
-### 2.5 求解 $c_k$
-设市场中 degree 为 0 的模型有 $n_0$ 个，degree 为 $\delta>0$ 的有 $n_\delta$ 个。则
-$$\Sigma(c) = n_0\min(1,c) + \sum_{\delta}n_\delta\min\{1, c(\delta+1)\}$$
-是 $c$ 的分段线性增函数。把正 degree 从大到小排序，设前 $m$ 个 degree 类饱和（$\pi=1$），则
-$$c = \frac{S - \sum_{i\le m} n_{\delta_i}}{n_0 + \sum_{i>m} n_{\delta_i}(\delta_i+1)},$$
-取使这个 $c$ 恰好饱和前 $m$ 类的唯一 $m$。代码在 replay 中增量维护 degree 直方图，每次选择只需遍历一遍不同的 degree 值（`replay.py::_pps_c`）。degree 为 0 的模型先抽二项分布的个数，再用拒绝抽样取出具体模型。
+### 2.5 求解 $c_k$：$\sum_l\pi_{kl}=S$ 是怎么解出来的
+
+**第一步：为什么要求 $\sum_l\pi_{kl}=S$。** 泊松抽样下，每个候选独立地以 $\pi_{kl}$ 入选，所以候选集大小的期望是
+$$E|\mathcal D_k| = \sum_{l\in\mathcal M_k}\Pr(l\in\mathcal D_k) = \sum_{l\in\mathcal M_k}\pi_{kl}.$$
+令它等于目标大小 $S=300$，就得到一个只含一个未知数 $c_k$ 的方程：
+$$\Sigma(c) \equiv \sum_{l\in\mathcal M_k}\min\{1,\ c\,(d_{kl}+1)\} = S.$$
+（被选父模型若没被抽中会被补入，所以实际的平均大小略大于 $S$。方案 A 删去了作者历史，所以平均为 299.5。）
+
+**第二步：按 degree 分组。** $\pi$ 只依赖于 degree，所以把市场按 degree 值分组：degree 为 $\delta$ 的模型有 $n_\delta$ 个（$\delta=0,1,2,\dots$，权重 $\delta+1$）。方程变为
+$$\Sigma(c) = \sum_{\delta} n_\delta\,\min\{1,\ c(\delta+1)\} = S.$$
+
+**第三步：$\Sigma(c)$ 的形状。** 每一项 $\min\{1, c(\delta+1)\}$ 都是 $c$ 的分段线性函数：
+- $c < 1/(\delta+1)$ 时它等于 $c(\delta+1)$，随 $c$ 线性增长；
+- $c \ge 1/(\delta+1)$ 时它**饱和**为 1，即这一组的模型必然入选。
+
+degree 越大，饱和得越早。所以对任意 $c$，饱和的总是 **degree 最大的若干组**。$\Sigma(c)$ 连续、单调递增，从 0 增长到 $|\mathcal M_k|$，所以当 $|\mathcal M_k| > S$ 时方程有唯一解。
+
+**第四步：给定"哪些组饱和"，方程是线性的。** 把正 degree 从大到小排成 $\delta_1>\delta_2>\dots$，假设恰好前 $m$ 组饱和：
+$$\Sigma(c) = \underbrace{\sum_{i\le m}n_{\delta_i}}_{\text{饱和组：每个模型贡献 }1} + c\underbrace{\Big(n_0 + \sum_{i>m}n_{\delta_i}(\delta_i+1)\Big)}_{\text{未饱和组：贡献 }c(\delta+1)} = S$$
+$$\Rightarrow\quad c_m = \frac{S - \sum_{i\le m}n_{\delta_i}}{n_0 + \sum_{i>m}n_{\delta_i}(\delta_i+1)}.$$
+这就是 2.5 节那个式子的来历：**分子**是"还没被必然入选的模型占用的名额"，**分母**是未饱和模型的总权重。
+
+**第五步：找出正确的 $m$。** $c_m$ 只有在与"前 $m$ 组饱和"的假设自洽时才是解：
+- 第 $m$ 组确实饱和：$c_m(\delta_m+1)\ge 1$；
+- 第 $m+1$ 组确实没有饱和：$c_m(\delta_{m+1}+1) < 1$；
+- 零 degree 组没有饱和：$c_m \le 1$。
+
+从 $m=0$ 开始依次尝试，第一个满足条件的 $m$ 就给出 $c_k$。由于 $\Sigma$ 单调，这样的 $m$ 唯一。如果 $|\mathcal M_k|\le S$，则全部模型入选，$c=\infty$。
+
+**实现：** replay 按时间顺序处理选择，增量维护每个模态的 degree 直方图 $\{n_\delta\}$。每次只需按上面的方法遍历一遍不同的 degree 值（`replay.py::_pps_c`，同一时刻、同一模态的选择共用一个 $c$）。degree 为 0 的模型先抽二项分布 $\mathrm{Bin}(n_0, c)$ 的个数，再用拒绝抽样取出具体模型，这样不必逐个遍历几十万个零 degree 模型。
+
+**下面用一个小例子演示：** 3 个模型 degree 为 99，10 个为 9，1,000 个为 0，目标 $S=50$。
+""")
+
+code(r"""
+def solve_c(hist, S):
+    # hist: {degree: count}. Returns c with sum_delta n_delta * min(1, c (delta + 1)) = S (step 5 above).
+    n0 = hist.get(0, 0)
+    pos = sorted((d for d in hist if d > 0), reverse=True)
+    if sum(hist.values()) <= S:
+        return np.inf, []
+    trace = []
+    for m in range(len(pos) + 1):
+        sat = sum(hist[d] for d in pos[:m])
+        W = n0 + sum(hist[d] * (d + 1) for d in pos[m:])
+        c = (S - sat) / W
+        ok = (m == 0 or c * (pos[m - 1] + 1) >= 1) and (m == len(pos) or c * (pos[m] + 1) < 1) and c <= 1
+        trace.append(dict(m=m, saturated_models=sat, unsaturated_weight=W, c=c, consistent=ok))
+        if ok:
+            return c, trace
+    raise ValueError("no consistent m")
+
+hist = {99: 3, 9: 10, 0: 1000}
+c, trace = solve_c(hist, 50)
+show(pd.DataFrame(trace).round(4))
+pi = {d: min(1, c * (d + 1)) for d in hist}
+print(f"c = {c:.5f}; pi: " + ", ".join(f"degree {d}: {p:.4f}" for d, p in pi.items()))
+print(f"check: expected set size = {sum(hist[d] * pi[d] for d in hist):.4f} (target 50)")
 """)
 
 md(r"""
@@ -321,7 +373,7 @@ parts = []
 for f in sorted(glob.glob(f"{CH}/feats/*.parquet")):
     if f.endswith(".notext.parquet"):
         continue
-    x = pd.read_parquet(f, columns=["choice_id", "chosen", "log_q", "author_reuse"])
+    x = pd.read_parquet(f, columns=["choice_id", "chosen", "log_q", "author_reuse", "fe"])
     parts.append(x[x.choice_id.isin(ids) & (x.author_reuse == 0)])
 R_ = pd.concat(parts, ignore_index=True)
 R_["inv"] = np.exp(-R_.log_q.astype(np.float64))
@@ -336,6 +388,8 @@ print(f"choices {len(cs):,} (train {len(tr):,}); rows {len(R_):,} (train {int(tr
 print(f"set size: mean {cs['size'].mean():.1f}, median {cs['size'].median():.0f}; pi = 1 per set: mean "
       f"{cs.certain.mean():.2f} (all), {tr.certain.mean():.2f} (train)")
 print(f"chosen parent has pi = 1: {pct(cs.chosen_pi1.mean())} (all), {pct(tr.chosen_pi1.mean())} (train)")
+hub = R_.fe.to_numpy() > 0
+print(f"rows of the 500 FE hubs: {hub.sum():,}; of these with pi < 1 (offset != 0): {pct((R_.log_q.to_numpy()[hub] < 0).mean())}")
 # true market size: same modality, born before t
 nodes = pd.read_parquet(f"{DATA}/processed/nodes/nodes.parquet", columns=["birth", "modality_code"])
 true_n = np.zeros(len(cs))
@@ -435,6 +489,13 @@ $$V_{kl} = \theta^\top x_{kl} + \sum_{h=1}^{500}\phi_h\,\mathbb 1[l = h].$$
 - 500 个枢纽是留出切点 $t_h$ 时 degree 最高的 500 个模型，事前确定，与抽样无关。
 - 非枢纽的 $\phi=0$，作为基准，所以 $\phi_h$ 是"相对于非枢纽"的不变吸引力。
 - 加一个很小的 L2 惩罚 $\tfrac{\lambda}{2}\|\phi\|^2$（$\lambda=10^{-4}$），使很少出现在候选集里的枢纽在数值上可识别。
+
+**为什么这个式子里没有 $-\log\pi$：** $V_{kl}$ 是**效用**，即模型对开发者行为的设定，与式 (1) 中的 $\theta^\top x_{kl}$ 对应。$-\log\pi_{kl}$ 不是效用的一部分，它是**研究者抽样**造成的修正，只在用抽样候选集计算似然时出现。所以带 FE 时，估计用的仍然是式 (3)：
+$$P(j\mid\mathcal D_k) = \frac{\exp(V_{kj} - \log\pi_{kj})}{\sum_{l\in\mathcal D_k}\exp(V_{kl} - \log\pi_{kl})},\qquad V_{kl} = \theta^\top x_{kl} + \sum_h\phi_h\mathbb 1[l=h].$$
+- Proposition 1 的证明对任意形式的 $V$ 都成立，只要求它是 logit。所以加入 FE 不改变修正。
+- 在代码中，`log_q` 列作为偏移进入每一个模型，包括 FE 模型和 Shapley 的全部子集（`clogit.py` 中效用为 $X\theta + \phi_{fe} - \log q$）。
+- FE 的枢纽是 $t_h$ 时的前 500 名，但它们在候选集中**大多不是** $\pi=1$：§2.7 的统计显示，枢纽所在的 429 万行中有 73.6% 的 $\pi<1$（较早的选择里这些模型的 degree 还不高；而且 $\pi=1$ 只覆盖每个候选集中约 8.5 个最热门的模型）。所以偏移和 FE 必须同时出现，不能省略。
+- **写论文时的建议：** 在 4.5 写 FE 模型时加一句"estimated with the same offset as (3)"，避免读者产生同样的疑问。
 
 ### 3.4 计算
 - **数据结构：** 按候选集大小分桶（同一桶内大小相差不超过 10%），每桶补齐成一个张量，常驻 GPU。特征用 float32 存储，似然、梯度和 Hessian 用 float64 累加。
