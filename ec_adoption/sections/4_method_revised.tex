@@ -1,0 +1,437 @@
+% =====================================================================================================================
+% Revised Section 4 (Method). Draft for the author to edit; the original sections/4_method.tex is unchanged.
+%
+% How to use: in main.tex replace \input{sections/4_method} by \input{sections/4_method_revised}, and add
+% \input{appendix/method_revised_proofs} next to the other appendices (it holds the proofs cited here).
+% All labels used elsewhere in the paper (sec:method, eq:logit, sec:sampling, eq:pps, prop:pps, eq:corrected,
+% sec:shapley, eq:shapley, sec:bounds, sec:validation) are kept.
+%
+% Theorem environments: acmart defines definition, lemma, proposition, corollary; assumption and remark are
+% defined below if missing (no change to main.tex needed).
+%
+% Changes relative to 4_method.tex, by comment of the author:
+%  1. 4.1 now defines the choice occasion, degree and the information set (Def. 1) before the random-utility
+%     assumption (Assumption 1); IIA is stated, because Prop. 1 uses it.
+%  2. Consistency / asymptotic normality is a separate corollary (Cor. 1) after the sampling proposition.
+%  3. 4.3 is about the estimator: weighted sampled likelihood, gradient and Hessian, concavity (Lemma 3), the
+%     estimation algorithm (Algorithm 1), the clustered sandwich and the multiplier bootstrap. Hardware is one
+%     sentence.
+%  4. 4.4 starts from why coefficients cannot answer the question (units, groups, within-set variation, order
+%     dependence with the real numbers) and defines the likelihood-gain game (Def. 3) before the Shapley value.
+%  5. 4.5 defines the hub set formally (Def. 4) and states the noise-corrected split as a lemma.
+%  6. 4.6 writes the three generating utilities, the simulated choice and the recovery criterion as equations.
+%  New 4.7: samples, weights and author types (definitions only; results in Section 5, Table tab:samples).
+%  Five groups (self-supply and habit replace inertia) and 2^5 = 32 fits throughout.
+%
+% Section 3 needs two matching edits (not done): (a) "the 500 most adopted parents" -> refer to Def. 4 (the hubs are
+% ranked by degree d_l(t_h) over all children, not by first adoptions); (b) the inertia group -> self-supply
+% (same_author) and habit (author_reuse, author_family, is_last).
+% =====================================================================================================================
+\makeatletter
+\@ifundefined{assumption}{\newtheorem{assumption}{Assumption}}{}
+\@ifundefined{remark}{\theoremstyle{acmdefinition}\newtheorem{remark}[theorem]{Remark}\theoremstyle{acmplain}}{}
+\makeatother
+
+\section{Model and Estimation}
+\label{sec:method}
+
+\Cref{sec:data} showed that adoption is highly concentrated and that popularity, general quality and demand match
+could each produce this concentration. To separate them we need a model in which all three can act at once and be
+compared on a common scale. This section builds that model (\cref{sec:choice}), makes it computable on markets of
+hundreds of thousands of alternatives (\cref{sec:sampling,sec:estimation}), turns its estimates into a
+decomposition by signal group (\cref{sec:shapley}), bounds what unmeasured quality could add (\cref{sec:bounds}),
+and checks that the decomposition recovers known mechanisms (\cref{sec:validation}).
+
+% ---------------------------------------------------------------------------------------------------------------------
+\subsection{Base-model selection as a discrete choice}
+\label{sec:choice}
+
+\begin{definition}[Choice occasion]
+\label{def:occasion}
+A \emph{choice occasion} $k$ is a first adoption (\cref{sec:data}), described by its author $a_k$, time $t_k$,
+modality $m_k$ and chosen parent $j_k$. Its \emph{market} $\M_k$ is the set of models of modality $m_k$ created
+before $t_k$ that $a_k$ has not used as a parent. The \emph{degree} of a model $l$ at time $t$ is
+\[
+  d_l(t) = \#\{c : \text{$c$ declares $l$ as its parent with type fine-tune, adapter or unspecified, and $c$ was
+  created before $t$}\},
+\]
+and $d_{kl} = d_l(t_k)$. Every candidate $l \in \M_k$ carries a feature vector $x_{kl} \in \mathbb{R}^p$ computed
+only from models, edges and metadata that exist before $t_k$.
+\end{definition}
+
+The features are the five groups $g \in \mathcal G = \{\text{pop}, \text{qual}, \text{match}, \text{self},
+\text{habit}\}$ of \cref{sec:data}: popularity, general quality, demand match, self-supply (the candidate is the
+author's own model) and habit (the candidate belongs to a family the author used before). We write $x_{kl} =
+(x_{kl,g})_{g \in \mathcal G}$ and $\theta = (\theta_g)_{g \in \mathcal G}$ conformably. Popularity and quality
+features vary over candidates and time; demand-match, self-supply and habit features also vary over authors.
+
+\begin{assumption}[Random utility]
+\label{ass:rum}
+The author of occasion $k$ chooses $j_k = \arg\max_{l \in \M_k} U_{kl}$, where
+\[
+  U_{kl} = V_{kl} + \varepsilon_{kl}, \qquad V_{kl} = \theta^\top x_{kl},
+\]
+and the $\varepsilon_{kl}$ are i.i.d.\ standard Type-I extreme value, independent of $\{x_{kl}\}_{l \in \M_k}$.
+\end{assumption}
+
+\begin{lemma}[\citealp{mcfadden1974conditional}]
+\label{lem:logit}
+Under \cref{ass:rum},
+\begin{equation}
+  P(j \mid \M_k) = \frac{\exp(\theta^\top x_{kj})}{\sum_{l \in \M_k} \exp(\theta^\top x_{kl})}.
+  \label{eq:logit}
+\end{equation}
+\end{lemma}
+
+\begin{remark}[What the model does and does not say]
+\label{rem:logit}
+(i) \emph{Identification.} Only differences across candidates within an occasion enter \eqref{eq:logit}; a
+variable that is constant across $l \in \M_k$ (author experience, organizational status) cancels. Author
+heterogeneity therefore enters through author-specific features (demand match, self-supply, habit) and through
+estimation by author type (\cref{sec:samples}).
+(ii) \emph{Scale.} The error variance is normalized, so $\theta$ is measured relative to the dispersion of tastes;
+comparisons across samples are made with likelihood shares (\cref{sec:shapley}), which are scale free, not with
+coefficients.
+(iii) \emph{Independence of irrelevant alternatives.} $P(j \mid \M_k) / P(l \mid \M_k) = \exp(V_{kj} - V_{kl})$
+does not depend on the other alternatives. \Cref{prop:pps} uses this property.
+(iv) \emph{Interpretation.} We read $\theta$ descriptively, as the weights that best summarize which signals
+choices co-move with, not as causal effects (\cref{sec:discussion}).
+\end{remark}
+
+Two network-growth models are special cases. With $\theta = 0$, \eqref{eq:logit} is \emph{uniform attachment}:
+every model in the market is equally likely. With only $x_{kl} = (\log \max(d_{kl},1),\ \1[d_{kl}>0])$ and
+coefficients $(\alpha, \beta)$,
+\[
+  P(j \mid \M_k) \;\propto\;
+  \begin{cases} e^{\beta}\, d_{kj}^{\alpha}, & d_{kj} > 0, \\ 1, & d_{kj} = 0, \end{cases}
+\]
+which is \emph{preferential attachment} with exponent $\alpha$; $\alpha = 1$ is the linear model of
+\citet{barabasi1999emergence}. Following \citet{overgoor2019choosing}, \eqref{eq:logit} nests these mechanisms and
+lets them be compared by likelihood together with quality and demand match.
+
+% ---------------------------------------------------------------------------------------------------------------------
+\subsection{Sampling the competitors that matter}
+\label{sec:sampling}
+
+The denominator of \eqref{eq:logit} has a median of \marketMedian{} terms, and the training data contain \nTrain{}
+occasions, so the likelihood cannot be evaluated on full markets. We evaluate it on a sampled candidate set.
+
+\begin{definition}[Degree-proportional Poisson design]
+\label{def:pps}
+For occasion $k$ and a target size $S$, every $l \in \M_k$ enters the candidate set $\D_k$ independently with
+probability
+\begin{equation}
+  \pi_{kl} = \min\{1,\; c_k (d_{kl} + 1)\},
+  \label{eq:pps}
+\end{equation}
+where the scale $c_k > 0$ solves $\sum_{l \in \M_k} \pi_{kl} = S$. The chosen parent $j_k$ is added to $\D_k$ if it
+was not drawn.
+\end{definition}
+
+The inclusion probability is proportional to $d+1$ (the $+1$ keeps never-used models in the design), and $c_k$ is
+the factor of proportionality. The condition on $c_k$ fixes the expected size of the set:
+
+\begin{lemma}[Set size and the scale $c_k$]
+\label{lem:size}
+(i) $\E|\D_k| = \sum_{l \in \M_k} \pi_{kl} + (1 - \pi_{kj_k}) \in [S, S+1]$.
+(ii) Let $n_\delta$ be the number of models in $\M_k$ with degree $\delta$, and let $\delta_1 > \delta_2 > \dots >
+\delta_M > 0$ be the positive degrees. The function $\Sigma(c) = \sum_\delta n_\delta \min\{1, c(\delta+1)\}$ is
+continuous and non-decreasing, strictly increasing wherever some degree class is unsaturated
+($c(\delta+1) < 1$), and runs from $0$ to $|\M_k|$. If $|\M_k| > S$, $\Sigma(c) = S$ has a unique solution
+\[
+  c_k = \frac{S - \sum_{i \le m} n_{\delta_i}}{n_0 + \sum_{i > m} n_{\delta_i}(\delta_i + 1)},
+\]
+where $m \in \{0, \dots, M\}$ is the number of saturated classes: the unique $m$ with $c_k(\delta_i + 1) \ge 1$ for
+$i \le m$, $c_k(\delta_i + 1) < 1$ for $i > m$, and $c_k \le 1$.
+\end{lemma}
+
+\noindent The proof is in \cref{app:proofs}. With $S = 300$, on average \piOneMean{} candidates per training
+occasion have $\pi = 1$; these are the incumbents a developer is most likely to weigh, and \piOneChosen\% of chosen
+parents are among them. The rest of each set is a probability-proportional-to-size sample of the long tail.
+
+\begin{proposition}[Sampling correction]
+\label{prop:pps}
+Under \cref{ass:rum} and \cref{def:pps},
+\begin{equation}
+  P(j \mid \D_k) = \frac{\exp(\theta^\top x_{kj} - \log \pi_{kj})}{\sum_{l \in \D_k} \exp(\theta^\top x_{kl} - \log
+  \pi_{kl})}, \qquad j \in \D_k.
+  \label{eq:corrected}
+\end{equation}
+\end{proposition}
+
+\noindent Given that $j$ was chosen, the probability of drawing a set $\D \ni j$ is $q(\D \mid j) = \prod_{l \in \D
+\setminus \{j\}} \pi_l \prod_{l \notin \D} (1 - \pi_l)$, so $q(\D \mid j)/q(\D \mid l) = \pi_l / \pi_j$ for any $j,
+l \in \D$; Bayes' rule and \eqref{eq:logit} give \eqref{eq:corrected} (\cref{app:proofs};
+\citealp{mcfadden1978modelling}). The argument uses only the logit form of $P(j \mid \M_k)$, so it holds for any
+specification of $V_{kl}$, including the fixed-effect model of \cref{sec:bounds}.
+
+\begin{corollary}[Consistency and asymptotic normality]
+\label{cor:consistency}
+Let $\hat\theta$ maximize $\ell(\theta) = \sum_k \log P(j_k \mid \D_k; \theta)$ from \eqref{eq:corrected}. Suppose
+occasions are independent across authors with bounded numbers per author, the parameter space is compact with the
+true $\theta_0$ in its interior, $\E\|x_{kl}\|^2 < \infty$, and $H_0 = \E[\mathrm{Cov}_{p_k}(x_k)]$ is positive
+definite, where $\mathrm{Cov}_{p_k}$ is the covariance of $x_{kl}$ over $l \in \D_k$ under the probabilities
+\eqref{eq:corrected}. Then, as the number of authors $A \to \infty$, $\hat\theta \to \theta_0$ in probability and
+$\sqrt{A}(\hat\theta - \theta_0) \to N(0, H_0^{-1} \Omega_0 H_0^{-1})$, with $\Omega_0$ the variance of an author's
+summed score.
+\end{corollary}
+
+\noindent By \cref{prop:pps}, $\ell$ is a correctly specified conditional likelihood of the observed $(j_k, \D_k)$,
+and it is concave (\cref{lem:concave} below); the result follows from the standard argument for concave M-estimators
+\citep{newey1994large}. Two consequences of \eqref{eq:corrected} matter for what follows.
+
+\begin{remark}[Uniform attachment as the baseline, and why sample by degree]
+\label{rem:pps}
+(i) At $\theta = 0$, \eqref{eq:corrected} gives each sampled candidate the weight $1/\pi_{kl}$, and $\sum_{l \in
+\D_k} 1/\pi_{kl}$ is a Horvitz--Thompson estimate of $|\M_k|$ \citep{horvitz1952generalization}; uniform attachment
+on the sample therefore corresponds to uniform attachment on the full market. It is the baseline of every likelihood
+gain below.
+(ii) \Cref{cor:consistency} holds for any design with $\pi > 0$, but the information matrix $H_0 = \E[\mathrm{Cov}_{p_k}
+(x_k)]$ depends on the design: a candidate set contributes information only through the variation of $x$ among the
+candidates that have non-negligible choice probability. A uniform sample of 300 from $3 \times 10^5$ models almost
+never contains the few models that receive most adoptions, so the chosen parent is compared mostly with never-used
+models. Under a uniform design the median clustered standard error is \seRatioUnif{} times larger, and the
+estimated weights themselves change (\cref{sec:robustq}).
+\end{remark}
+
+% ---------------------------------------------------------------------------------------------------------------------
+\subsection{Estimation and inference}
+\label{sec:estimation}
+
+\Cref{cor:consistency} defines the estimator; we now state how it is computed and how its uncertainty is measured.
+Write $v_{kl}(\theta) = \theta^\top x_{kl} - \log \pi_{kl}$, $p_{kl}(\theta) = e^{v_{kl}} / \sum_{m \in \D_k}
+e^{v_{km}}$ and $\bar x_k(\theta) = \sum_{l \in \D_k} p_{kl} x_{kl}$. With occasion weights $w_k$ ($w_k = 1$ in the
+main specification; other weights in \cref{sec:samples} and the bootstrap below), the sampled log-likelihood is
+\begin{equation}
+  \ell(\theta) = \sum_k w_k \Big[ v_{kj_k}(\theta) - \log \sum_{l \in \D_k} e^{v_{kl}(\theta)} \Big].
+  \label{eq:loglik}
+\end{equation}
+
+\begin{lemma}[Concavity]
+\label{lem:concave}
+$\nabla \ell(\theta) = \sum_k w_k (x_{kj_k} - \bar x_k)$ and $\nabla^2 \ell(\theta) = -\sum_k w_k
+\mathrm{Cov}_{p_k}(x_k)$. Hence $\ell$ is concave, and strictly concave, with a unique maximizer, whenever
+$\sum_k w_k \mathrm{Cov}_{p_k}(x_k)$ is positive definite.
+\end{lemma}
+
+\noindent The offset $-\log \pi$ does not depend on $\theta$, so it changes neither the gradient's form nor the
+concavity. The first-order condition equates the weighted mean features of the chosen parents with their mean under
+the model. Concavity has a practical consequence: every refit in the decomposition and the bootstrap converges to
+the same optimum from any starting point, so warm starts change only computing time.
+
+\begin{center}
+\fbox{\begin{minipage}{0.94\linewidth}
+\textbf{Algorithm 1 (estimation).}
+\begin{enumerate}
+\item \emph{Replay.} Process the network in time order; at each occasion $k$ update $d_l(t_k)$, solve $c_k$
+  (\cref{lem:size}), draw $\D_k$ by \cref{def:pps}, and record $(x_{kl}, \log \pi_{kl})_{l \in \D_k}$.
+\item \emph{Fit.} Maximize \eqref{eq:loglik} by L-BFGS with the analytic gradient of \cref{lem:concave}; compute
+  the Hessian at $\hat\theta$.
+\item \emph{Subsets.} For every $\mathcal S \subseteq \mathcal G$, maximize \eqref{eq:loglik} with $\theta_g = 0$ for
+  $g \notin \mathcal S$, warm-started from the fit of $\mathcal S$ minus one group ($2^{|\mathcal G|} = \nShapFits{}$
+  fits; \cref{sec:shapley}).
+\item \emph{Bootstrap.} Repeat steps 2--3 $B = 50$ times with weights $w_k \xi_{a_k}$, $\xi_a \sim \mathrm{Exp}(1)$
+  i.i.d.\ over authors, warm-started from the point estimates.
+\end{enumerate}
+\end{minipage}}
+\end{center}
+
+\noindent The training data have \nRowsTrain{} million (occasion, candidate) rows; the full model fits in about a
+minute on one GPU.\footnote{Candidate sets are grouped into buckets of similar size and kept on the GPU in single
+precision; the likelihood, gradient and Hessian are accumulated in double precision.}
+
+\paragraph{Inference.}
+Occasions of one author are dependent (the same project, the same tastes, batch uploads): the \nFirst{} first
+adoptions come from \nFirstAuthors{} authors, and the median clustered standard error is \seClusterInfl{} times
+the one that treats occasions as independent. We therefore use the cluster-robust sandwich
+\[
+  \widehat{\mathrm{Var}}(\hat\theta) = \hat H^{-1} \Big( \textstyle\sum_a \hat s_a \hat s_a^\top \Big) \hat H^{-1},
+  \qquad \hat H = -\nabla^2 \ell(\hat\theta), \quad \hat s_a = \sum_{k: a_k = a} w_k (x_{kj_k} - \bar x_k(\hat\theta)),
+\]
+\citep{cameron2015practitioner}. For derived quantities, the Shapley shares of \cref{sec:shapley} in particular, we
+use the multiplier bootstrap of step 4: replicate $b$ maximizes $\sum_k \xi^{(b)}_{a_k} w_k \ell_k(\theta)$; the
+shares are recomputed in each replicate; and intervals are the 2.5\% and 97.5\% percentiles. Normalized Exp(1)
+weights are Dirichlet(1,\dots,1), the Bayesian bootstrap of \citet{rubin1981bayesian}; reweighting whole authors
+preserves within-author dependence, and the weighted bootstrap is valid for M-estimators of this kind
+\citep{ma2005robust}.
+
+\paragraph{Out-of-sample evaluation.}
+Let $K_h$ be the holdout occasions (the last 10\% in time) and $P_0$ uniform attachment ($\theta = 0$ in
+\eqref{eq:corrected}). We report the mean holdout log-likelihood gain
+\[
+  \Delta_h = \frac{1}{|K_h|} \sum_{k \in K_h} \big[ \log P(j_k \mid \D_k; \hat\theta) - \log P_0(j_k \mid \D_k)
+  \big],
+\]
+so that $e^{\Delta_h}$ is the geometric-mean factor by which the model raises the probability of the true parent
+over uniform attachment ($\Delta_h = \holdGain$, a factor of \holdGainTimes), and the top-$k$ rate, the share of
+holdout occasions in which $j_k$ ranks among the $k$ candidates with the highest $\hat V_{kl}$ (ranking by
+utility, without the offset; ties broken at random).
+
+% ---------------------------------------------------------------------------------------------------------------------
+\subsection{From coefficients to a decomposition}
+\label{sec:shapley}
+
+$\hat\theta$ has 26 components, but the question is about groups of signals: how much of developers' choices do
+popularity signals account for, and how much do quality and demand match? The coefficients cannot answer it
+directly, for four reasons.
+(i) Features have different units (indicators, logarithms of counts, similarities), so coefficients are not
+comparable across features.
+(ii) Each group contains several features, and the question concerns the group.
+(iii) What a group contributes to explaining a choice depends on how much its \emph{index}
+$I_{g,kl} = \theta_g^\top x_{kl,g}$ varies across the candidates of $\D_k$, not on the size of $\theta_g$ alone;
+a large coefficient on a feature that rarely varies within a set explains little.
+(iv) The groups are correlated: popular models are also well documented and match common tasks. The fit gained by
+adding a group therefore depends on which groups are already in the model. Demand match accounts for \matchFirst\%
+of the full model's likelihood gain when it enters first and for \matchLast\% when it enters last.
+We therefore measure each group by its contribution to the model's fit and allocate that contribution with a rule
+that does not depend on the order of entry.
+
+\begin{definition}[Likelihood-gain game]
+\label{def:game}
+For $\mathcal S \subseteq \mathcal G$, let $\hat\theta_{\mathcal S}$ maximize \eqref{eq:loglik} subject to
+$\theta_g = 0$ for $g \notin \mathcal S$, and let
+\[
+  G(\mathcal S) = \ell(\hat\theta_{\mathcal S}) - \ell(0),
+\]
+the log-likelihood gain over uniform attachment of the model with the groups in $\mathcal S$. The pair
+$(\mathcal G, G)$ is a cooperative game with $G(\emptyset) = 0$. Its holdout version $G_h(\mathcal S)$ evaluates the
+same $\hat\theta_{\mathcal S}$ by the mean holdout log-likelihood gain.
+\end{definition}
+
+Because the models are nested and fitted by maximum likelihood, $G$ is monotone: $\mathcal S \subseteq \mathcal T$
+implies $G(\mathcal S) \le G(\mathcal T)$. We allocate $G(\mathcal G)$ by the Shapley value
+\citep{shapley1953value},
+\begin{equation}
+  \phi_g = \sum_{\mathcal S \subseteq \mathcal G \setminus \{g\}}
+  \frac{|\mathcal S|!\,(|\mathcal G|-|\mathcal S|-1)!}{|\mathcal G|!}
+  \big[G(\mathcal S \cup \{g\}) - G(\mathcal S)\big],
+  \qquad s_g = \frac{\phi_g}{G(\mathcal G)},
+  \label{eq:shapley}
+\end{equation}
+the average marginal gain of group $g$ over all orders of entry. It is the only allocation that is efficient
+($\sum_g \phi_g = G(\mathcal G)$), symmetric, assigns zero to a group that never adds fit, and is additive in $G$; by
+monotonicity, every $s_g \in [0,1]$. Shapley allocations of fit are standard for correlated regressors
+\citep{lipovetsky2001analysis,huettner2012axiomatic}. To report coarser groups, such as \emph{fit} = quality $\cup$
+demand match, we apply \eqref{eq:shapley} to the game on blocks $v(\mathcal T) = G(\cup \mathcal T)$, whose values
+are among the \nShapFits{} fits already computed. Shares are reported in-sample and on the holdout; on the holdout a
+group gains only by predicting future choices, and $G_h$ need not be monotone.
+
+% ---------------------------------------------------------------------------------------------------------------------
+\subsection{Bounding general quality}
+\label{sec:bounds}
+
+Benchmark scores cover few models, so a small quality share could reflect missing measurement rather than
+indifference to quality. We bound it from above with model-specific intercepts for the most used models.
+
+\begin{definition}[Hubs]
+\label{def:hubs}
+Let $t_h$ be the train--holdout cut (\tHold). The \emph{hub set} $\mathcal H$ is the 500 models with the highest
+degree $d_l(t_h)$ over the whole Hub (all modalities; ties broken by model index). $\mathcal H$ uses only training
+data and does not depend on the sampling design.
+\end{definition}
+
+The fixed-effect model adds an intercept for each hub,
+\begin{equation}
+  V^{\mathrm{FE}}_{kl} = \theta^\top x_{kl} + \sum_{h \in \mathcal H} \phi_h \1[l = h],
+  \label{eq:fe}
+\end{equation}
+estimated by \eqref{eq:corrected} with the same offset (\cref{prop:pps} holds for any $V$) and a small ridge penalty
+$\frac{\lambda}{2}\|\phi\|^2$, $\lambda = 10^{-4}$. Non-hubs have $\phi = 0$, so $\phi_h$ is hub $h$'s
+time-invariant attractiveness relative to the rest of the market. It absorbs every fixed attribute of the hub:
+unmeasured quality, but also brand, tutorials and default status. Entering the fixed effects as an additional player
+in \cref{def:game} gives a share $s_{\mathrm{FE}}$, and
+\[
+  \bar s_{\mathrm{qual}} = s_{\mathrm{qual}} + s_{\mathrm{FE}}
+\]
+is the largest share that any time-invariant hub attribute could contribute to quality (\feShare\% of the gain
+in-sample).
+
+To see how much of the fixed effects is quality, we project the estimated intercepts on external quality measures
+$z_h$ (Open LLM Leaderboard v2 average; arena ratings) with controls $w_h$ (parameter count, re-distributor accounts),
+$\hat\phi_h = b_0 + b^\top z_h + \gamma^\top w_h + u_h$, over the \extHubs{} hubs that are covered and precisely
+estimated.
+
+\begin{lemma}[Noise-corrected quality share]
+\label{lem:noise}
+Suppose $\hat\phi_h = \phi_h + e_h$ with $\E[e_h \mid \phi_h, z_h, w_h] = 0$ and $\mathrm{Var}(e_h) = \sigma_h^2$.
+Then $\mathrm{Var}(\hat\phi) = \mathrm{Var}(\phi) + \bar\sigma^2$, the projection coefficients are unaffected by $e$,
+and
+\[
+  q = \frac{\mathrm{Var}(\hat b^\top z_h)}{\mathrm{Var}(\hat\phi_h) - \bar\sigma^2}
+\]
+estimates the share of $\mathrm{Var}(\phi)$ explained by external quality, with $\sigma_h^2$ the bootstrap variance
+of $\hat\phi_h$.
+\end{lemma}
+
+\noindent We split the fixed-effect share proportionally, $s^{\mathrm{ext}}_{\mathrm{qual}} = s_{\mathrm{qual}} + q\,
+s_{\mathrm{FE}}$ ($q = \extQ\%$). Shapley shares are not linear in a split of a player, so this split is an
+approximation; the two end points, $s_{\mathrm{qual}}$ and $\bar s_{\mathrm{qual}}$, do not depend on it
+(\cref{app:proofs}).
+
+% ---------------------------------------------------------------------------------------------------------------------
+\subsection{Does the decomposition recover known mechanisms?}
+\label{sec:validation}
+
+The decomposition attributes most of the likelihood gain to popularity (\cref{sec:results}). Because the groups are
+correlated, this could in principle be a property of the method rather than of the data. We test the method on
+choices whose generating mechanism is known by construction.
+
+For a generating utility $V^{(r)}$, keep every real candidate set $\D_k$ with its real features and inclusion
+probabilities, and replace the observed parent $j_k$ by a draw
+\begin{equation}
+  \tilde j^{(r)}_k \sim P^{(r)}(l \mid \D_k) = \frac{\exp(V^{(r)}_{kl} - \log \pi_{kl})}{\sum_{m \in \D_k}
+  \exp(V^{(r)}_{km} - \log \pi_{km})}, \qquad l \in \D_k,
+  \label{eq:sir}
+\end{equation}
+the model-implied choice on the sampled set (\cref{prop:pps}). We use three utilities built from the estimates of
+\cref{sec:estimation,sec:bounds}:
+\[
+  V^{\mathrm{SF}}_{kl} = \hat\theta_{\mathrm{pop}}^\top x_{kl,\mathrm{pop}}, \qquad
+  V^{\mathrm{QF}}_{kl} = \hat\theta_{\mathrm{qual}}^\top x_{kl,\mathrm{qual}} + \hat\theta_{\mathrm{match}}^\top
+  x_{kl,\mathrm{match}} + \hat q_l, \qquad
+  V^{\mathrm{FULL}}_{kl} = \hat V^{\mathrm{FE}}_{kl},
+\]
+where $\hat q_l = \hat b^\top z_l$ is the part of the hub intercept explained by external quality ($\hat q_l = 0$ for
+non-hubs). SF lets choices depend only on popularity, QF only on quality and demand match, and FULL on the estimated
+model. Running steps 2--3 of Algorithm 1 on $\{(\tilde j^{(r)}_k, \D_k)\}_k$ gives shares $\hat s(r)$. If the
+decomposition separates the mechanisms, $\hat s_{\mathrm{pop}}(\mathrm{SF})$ and $\hat s_{\mathrm{fit}}(\mathrm{QF})$
+should be close to one, and $\hat s(\mathrm{FULL})$ should equal the shares estimated on the real choices; $1 -
+\hat s_{\mathrm{pop}}(\mathrm{SF})$ and $1 - \hat s_{\mathrm{fit}}(\mathrm{QF})$ measure how much fit leaks to a
+correlated group.
+
+The decomposition attributes \recSfPop\% of the gain to popularity under SF and \recQfFit\% to fit under QF, and it
+returns \recFullPop\%, \recFullMatch\% and \recFullInertia\% (popularity, demand match, self-supply plus habit) under
+FULL, the shares estimated on the real choices.\todo{Recovery is run with four groups; rerun with five or keep the
+note that self-supply + habit = the former inertia group.} When choices are generated by quality and demand match
+alone, the decomposition does not manufacture a popularity share. As a check of the whole pipeline, we also grow
+synthetic networks in which a new node attaches to $l$ with weight $d_l^{\alpha}$ if $d_l > 0$ and $e^{\beta_0}$
+otherwise ($\alpha = 1$, $\beta_0 = -1$), replay them with the same code, and recover $\hat\alpha$ within three
+standard errors of one under all three sampling designs (\cref{app:validation}).
+
+% ---------------------------------------------------------------------------------------------------------------------
+\subsection{Samples, weights and author types}
+\label{sec:samples}
+
+The estimator above is defined for any set of occasions and weights. The main specification uses first adoptions
+with $w_k = 1$; \cref{sec:results} reports the alternatives defined here, and a rule for calling the results robust
+that we fixed before estimating them.
+
+\paragraph{Samples.} \emph{P}: first adoptions (main). \emph{D}: all 24-hour decisions, including repeat decisions.
+\emph{U}: all uploads. In D and U the author's earlier parents enter $\D_k$ with $\pi = 1$, so \cref{prop:pps}
+applies unchanged. On a repeat decision the degree of a candidate includes the author's own earlier children of it,
+which would load habit onto popularity. We therefore replace $d_{kl}$ by $\tilde d_{kl} = d_{kl} - o_{kl}$, where
+$o_{kl}$ counts the children of $l$ by author $a_k$ created before $t_k$ (and similarly for adoptions in the last 30
+days). On P, $o_{kl} \equiv 0$.
+
+\paragraph{Weights.} With $N$ occasions by $A$ authors and $n_a$ occasions of author $a$, \emph{author weights}
+$w_k = (N/A)/n_{a_k}$ give every author the same total weight and a mean weight of one. They estimate the behavior of
+the typical author rather than of the typical choice.
+
+\paragraph{Author types.} Authors are classified into six types (major organizations, re-distribution accounts,
+other organizations, and individuals with $\ge$100, 10--99 and $<$10 models; \cref{app:data}). Heterogeneity is
+tested by $LR = 2\big(\sum_\tau \ell_\tau(\hat\theta_\tau) - \ell(\hat\theta)\big)$, asymptotically $\chi^2$ with
+degrees of freedom equal to the number of additional parameters of the type-specific models; because the logit scale may differ across types, types are compared by
+shares, not coefficients.
+
+\paragraph{Robustness rule.} An alternative sample or weighting is called robust if its popularity share is within 10
+percentage points of the main specification and its fit/popularity ratio within a factor of three.

@@ -1,0 +1,76 @@
+% Proofs for sections/4_method_revised.tex. Input after the other appendices when the revised Section 4 is used.
+\section{Proofs for Section~\ref{sec:method}}
+\label{app:proofs}
+
+\paragraph{Proof of \cref{lem:size}.}
+(i) Let $I_{kl} = \1[l \in \D_k]$. For $l \ne j_k$, $I_{kl} \sim \mathrm{Bern}(\pi_{kl})$; $I_{kj_k} = 1$ because
+the chosen parent is added if it was not drawn. By linearity of expectation (independence is not needed),
+$\E|\D_k| = \sum_{l \ne j_k} \pi_{kl} + 1 = \sum_{l} \pi_{kl} + (1 - \pi_{kj_k})$, which lies in $[S, S+1]$ when
+$\sum_l \pi_{kl} = S$.
+
+(ii) Each term $n_\delta \min\{1, c(\delta+1)\}$ is continuous and non-decreasing in $c$, linear with slope
+$n_\delta(\delta+1) > 0$ for $c < 1/(\delta+1)$ and constant afterwards; hence $\Sigma$ is continuous,
+non-decreasing, strictly increasing wherever at least one class is unsaturated, $\Sigma(0) = 0$ and $\Sigma(c) =
+|\M_k|$ once every class is saturated (for $c \ge 1$). If $|\M_k| > S$, the intermediate-value theorem gives a
+solution, and at any solution some class is unsaturated (otherwise $\Sigma = |\M_k| > S$), so $\Sigma$ is strictly
+increasing there and the solution is unique. Since $1/(\delta+1)$ decreases in $\delta$, the saturated classes at
+$c_k$ are always the $m$ largest degrees. Given $m$, $\Sigma(c) = \sum_{i \le m} n_{\delta_i} + c\,(n_0 + \sum_{i >
+m} n_{\delta_i}(\delta_i + 1))$, and solving $\Sigma(c) = S$ gives the formula. The consistency conditions select
+the true $m$; trying $m = 0, 1, \dots$ in turn finds it in one pass over the distinct degrees, and the replay keeps
+the degree histogram up to date incrementally. Degree-0 models are drawn as a $\mathrm{Bin}(n_0, c_k)$ count followed
+by rejection sampling. \hfill$\square$
+
+\paragraph{Proof of \cref{prop:pps}.}
+Fix $k$ and drop the index. Every $l \ne j$ enters $\D$ independently with probability $\pi_l$, and $j$ is always in
+$\D$, so given that $j$ was chosen the probability of a set $\D \ni j$ is $q(\D \mid j) = \prod_{l \in \D \setminus
+\{j\}} \pi_l \prod_{l \notin \D}(1 - \pi_l)$. For $j, l \in \D$ the two products differ only in the factors of $j$
+and $l$, so $q(\D \mid l) = q(\D \mid j)\,\pi_j / \pi_l$. By Bayes' rule and \eqref{eq:logit},
+\[
+  P(j \mid \D) = \frac{P(j \mid \M)\, q(\D \mid j)}{\sum_{l \in \D} P(l \mid \M)\, q(\D \mid l)}
+  = \frac{e^{V_j}\, q(\D \mid j)}{\sum_{l \in \D} e^{V_l}\, q(\D \mid j)\, \pi_j / \pi_l}
+  = \frac{e^{V_j - \log \pi_j}}{\sum_{l \in \D} e^{V_l - \log \pi_l}}.
+\]
+Only $P(j \mid \M) \propto e^{V_j}$ is used, so the result holds for any $V$ (in particular \eqref{eq:fe}).
+\hfill$\square$
+
+\paragraph{Proof of \cref{cor:consistency} (sketch).}
+By \cref{prop:pps}, $\ell_k(\theta) = \log P(j_k \mid \D_k; \theta)$ is the log of a correctly specified conditional
+density of the observed $j_k$ given $\D_k$, so $\theta_0$ maximizes $\E[\ell_k(\theta)]$ (information inequality).
+By \cref{lem:concave}, $\ell_k$ is concave, and $-\nabla^2 \E[\ell_k] = \E[\mathrm{Cov}_{p_k}(x_k)]$ is positive
+definite at $\theta_0$, so the maximizer is unique. Group occasions by author: the author sums
+$L_a(\theta) = \sum_{k: a_k = a} \ell_k(\theta)$ are independent with bounded size, so a law of large numbers holds
+pointwise, and for concave objectives pointwise convergence to a uniquely maximized limit implies consistency
+\citep[Thm.~2.7]{newey1994large}. Asymptotic normality follows from a mean-value expansion of the first-order
+condition and the central limit theorem for the independent author scores $\nabla L_a(\theta_0)$, giving the
+sandwich $H_0^{-1} \Omega_0 H_0^{-1}$ \citep[Thm.~3.1]{newey1994large}. \hfill$\square$
+
+\paragraph{Proof of \cref{lem:concave}.}
+For one occasion, $\ell_k = v_{kj_k} - \log \sum_l e^{v_{kl}}$ with $\partial v_{kl} / \partial \theta = x_{kl}$.
+Then $\nabla \ell_k = x_{kj_k} - \sum_l p_{kl} x_{kl}$, and differentiating $\bar x_k = \sum_l p_{kl} x_{kl}$ with
+$\partial p_{kl} / \partial \theta = p_{kl}(x_{kl} - \bar x_k)$ gives $\nabla^2 \ell_k = -\sum_l p_{kl}(x_{kl} -
+\bar x_k)(x_{kl} - \bar x_k)^\top = -\mathrm{Cov}_{p_k}(x_k)$, a negative semi-definite matrix. Summing with
+non-negative weights preserves this; if the weighted sum of covariances is positive definite at every $\theta$, the
+Hessian is negative definite and the maximizer is unique. \hfill$\square$
+
+\paragraph{Proof of \cref{lem:noise}.}
+With $\hat\phi_h = \phi_h + e_h$ and $\E[e_h \mid \phi_h, z_h, w_h] = 0$, $\mathrm{Cov}(\phi_h, e_h) = 0$, so
+$\mathrm{Var}(\hat\phi) = \mathrm{Var}(\phi) + \E[\sigma_h^2]$. The population projection of $\hat\phi$ on $(z, w)$
+equals that of $\phi$, because $\mathrm{Cov}(z, e) = \mathrm{Cov}(w, e) = 0$; hence $\mathrm{Var}(b^\top z)$ is the
+variance of the quality part of $\phi$ itself, and dividing it by $\mathrm{Var}(\hat\phi) - \bar\sigma^2$ estimates
+its share of $\mathrm{Var}(\phi)$. Without the correction the denominator is too large and the quality share too
+small. We use the bootstrap variance of each $\hat\phi_h$ for $\sigma_h^2$ and keep hubs with bootstrap standard error
+below one. \hfill$\square$
+
+\paragraph{The proportional split.}
+$s^{\mathrm{ext}}_{\mathrm{qual}} = s_{\mathrm{qual}} + q\, s_{\mathrm{FE}}$ assumes that the quality and the
+non-quality parts of the hub intercepts contribute to the likelihood gain in proportion to their variances. An exact
+allocation would enter the quality part $\hat b^\top z_h$ as a separate Shapley player, which requires external
+quality for every hub; coverage is limited to \extHubs{} hubs. The lower end ($s_{\mathrm{qual}}$, no fixed effects)
+and the upper end ($\bar s_{\mathrm{qual}}$, the whole fixed-effect share counted as quality) do not use the split.
+
+\paragraph{The recovery draws.}
+In \eqref{eq:sir}, $\D_k$ is the realized candidate set, which was drawn with the real $j_k$ forced in. The
+simulated choice is therefore a draw from the model-implied conditional law on the realized set; the forced
+inclusion of one real parent among about 300 candidates has a negligible effect on the composition of the set.
+The draws use the four-group decomposition of the earlier analysis, whose inertia group equals self-supply and habit
+combined; the full model, and hence $V^{\mathrm{FULL}}$, is the same under four and five groups.
