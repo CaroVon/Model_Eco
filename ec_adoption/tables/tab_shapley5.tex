@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\caption{Shapley decomposition of the log-likelihood gain over uniform attachment, five groups (main specification: first adoptions, $(d{+}1)$ PPS candidate sets, no FE). In-sample shares with 95\% multiplier-bootstrap intervals (50 replicates, authors resampled); holdout = share of the mean per-choice gain on the last 10\% of choices in time; LR = likelihood-ratio statistic for dropping the group from the full model.}
+\label{tab:shapley5}
+\small
+\begin{tabular}{lrcrr}
+\toprule
+Group & Share (\%) & 95\% CI & Holdout (\%) & LR \\
+\midrule
+Popularity & 91.6 & [91.1, 91.9] & 91.7 & 1,385,594 \\
+General quality & 0.006 & [0.002, 0.011] & 0.001 & 25 \\
+Demand match & 5.2 & [5.0, 5.5] & 4.6 & 15,769 \\
+Self-supply & 2.9 & [2.6, 3.4] & 3.2 & 42,547 \\
+Habit & 0.3 & [0.3, 0.4] & 0.5 & 10 \\
+\midrule
+\multicolumn{5}{l}{Holdout gain over uniform: 6.62 nats/choice; top-1 / top-10 accuracy 14.2\% / 39.8\%} \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,6 +1,6 @@
 """LaTeX tables for the paper drafts (<draft>/tables/*.tex), generated from results/tables/v2/*.csv so every number
 in the paper traces to a result file. Re-run after any re-estimation:
-    python scripts/paper_tables.py                 # EC draft (ec_adoption/) and ICML draft (paper/)
+    python scripts/paper_tables.py                 # EC draft (ec_adoption/), ICML draft (paper/), Overleaf clone (paper/TODO-Foundation Model Race/)
     python scripts/paper_tables.py --draft ec_adoption
 Also writes <draft>/tables/numbers.tex: \\newcommand macros for numbers quoted in the text.
 """
@@ -11,7 +11,7 @@ import pandas as pd
 from hfpa import paths
 
 T = paths.TABLES / "v2"
-DRAFTS = ["ec_adoption", "paper"]
+DRAFTS = ["ec_adoption", "paper", "paper/TODO-Foundation Model Race"]  # last one: git clone of the Overleaf project (same name as on Overleaf)
 GROUP_TEX = {"popularity": "Popularity", "general quality": "General quality", "demand match": "Demand match",
              "inertia": "Inertia"}
 ORDER = list(GROUP_TEX)
@@ -103,7 +103,7 @@ def tab_q():
             "Same choices, features and estimator; only the inclusion probabilities $\\pi$ differ. Coefficients with "
             "bootstrap SEs. Under uniform sampling almost every sampled competitor is a never-used model, so "
             "top-1 accuracy is high but the data contain few comparisons among popular models.}\n\\label{tab:q}\n"
-            "\\small\n\\begin{tabular}{lccc}\n\\toprule\n & " + " & ".join(l for _, l in specs) + " \\\\\n\\midrule\n"
+            "\\footnotesize\n\\setlength{\\tabcolsep}{4pt}\n\\begin{tabular}{lccc}\n\\toprule\n & " + " & ".join(l for _, l in specs) + " \\\\\n\\midrule\n"
             + "\n".join(lines) + "\n\\bottomrule\n\\end{tabular}\n\\end{table*}\n")
     put("tab_q", body)
     macro("logdegUnif", f"{C['unif'].loc['log_deg'].coef:.3f}")
@@ -164,7 +164,7 @@ def tab_coef():
         mult = f"{M.loc[r.param].multiplier:.3g}" if r.param in M.index else "--"
         name = r.param.replace("_", "\\_")
         lines.append(f"\\texttt{{{name}}} & {r.coef:.3f} & {r.se_cl:.3f} & [{r.lo:.3f}, {r.hi:.3f}] & {mult} \\\\")
-    body = ("\\begin{table}[h]\n\\centering\n\\caption{Conditional-logit coefficients, main specification (no FE). "
+    body = ("\\begin{table}[htbp]\n\\centering\n\\caption{Conditional-logit coefficients, main specification (no FE). "
             f"SE clustered by author; 95\\% multiplier-bootstrap interval ({int(C.reps.iloc[0])} replicates). Last "
             "column: the factor on $(1+d)$ that is worth the same utility as a one-SD (binary: 0$\\to$1) change of the "
             "feature.}\n\\label{tab:coef}\n\\scriptsize\n\\begin{tabular}{lrrcr}\n\\toprule\nFeature & Coef. & SE & "
@@ -178,7 +178,7 @@ def tab_validate():
     lines = [f"\\texttt{{{r.param.replace('_', chr(92) + '_')}}} & {r.coef_10pct:.3f} ({r.se_cl_10pct:.3f}) & "
              f"{r.coef_full:.3f} ({r.se_cl_full:.3f}) & {'yes' if r.in_10pct_ci else 'no'} & {r.se_ratio:.2f} \\\\"
              for _, r in V.iterrows()]
-    body = ("\\begin{table}[h]\n\\centering\n\\caption{Full-data estimates (stratified design) against the earlier "
+    body = ("\\begin{table}[htbp]\n\\centering\n\\caption{Full-data estimates (stratified design) against the earlier "
             "10\\% sample. Differences outside the 10\\% interval concern features redefined in the rebuild.}\n"
             "\\label{tab:validate}\n\\scriptsize\n\\begin{tabular}{lccrr}\n\\toprule\nFeature & 10\\% sample & Full & "
             "In CI & SE ratio \\\\\n\\midrule\n" + "\n".join(lines) + "\n\\bottomrule\n\\end{tabular}\n\\end{table}\n")
@@ -312,6 +312,117 @@ def tab_samples():
     macro("retIndivRel", pct(w.rel_to_pbar))
 
 
+FIVE = [("popularity", "Popularity", "Pop"), ("general quality", "General quality", "Qual"),
+        ("demand match", "Demand match", "Match"), ("self-supply", "Self-supply", "Self"), ("habit", "Habit", "Habit")]
+POPSPLIT = [("extensive", "Used at all (\\texttt{has\\_deg})", "Ext"),
+            ("cumulative", "Cumulative adoptions (\\texttt{log\\_deg})", "Cum"),
+            ("momentum", "Momentum, 30 days (\\texttt{lrec30})", "Mom"),
+            ("visibility", "Visibility (organization, re-distribution, quantized, library)", "Vis"),
+            ("local", "Local (co-users, dataset co-use)", "Loc"),
+            ("lifecycle", "Lifecycle (age, legacy generation)", "Life"),
+            ("nonpop", "All non-popularity groups", "Nonpop")]
+
+
+def results5():
+    """Section 5 (five groups, P5): Shapley table, LR tests, popularity split, intensive margin, latent class,
+    choice classification; v2_explore.py outputs (v2x_*)."""
+    import pickle
+    from hfpa.v2data import cdir
+    S = pd.read_csv(T / "v2s_P5_shapley.csv")
+    S = S[(S.variant == "no FE") & (S.partition == "groups")]
+    IN, HO = S[S.measure == "in-sample"].set_index("group"), S[S.measure == "holdout"].set_index("group").share
+    P = pickle.load(open(cdir("v2_pps") / "v2_samples" / "P5" / "fit.pkl", "rb"))
+    fits, groups = P["fits"], P["groups"]
+    G = lambda grp: fits[frozenset(grp)]["ll"] - fits[frozenset()]["ll"]
+    allg = list(groups)
+    key = {"pop": "Pop", "qual": "Qual", "match": "Match", "self": "Self", "habit": "Habit"}
+    for g in allg:
+        macro(f"lrFive{key[g]}", f"{2 * (G(allg) - G([h for h in allg if h != g])):,.0f}")
+        macro(f"dfFive{key[g]}", str(len(groups[g])))
+    h = P["nofe"]["hold"]
+    rows = []
+    for g, lab, k in FIVE:
+        r = IN.loc[g]
+        d = 1 if r.share > 1e-3 else 3
+        rows.append(f"{lab} & {pct(r.share, d)} & [{pct(r.lo, d)}, {pct(r.hi, d)}] & "
+                    f"{pct(HO.loc[g], 1 if HO.loc[g] > 1e-3 else 3)} & {macro_get('lrFive' + k)} \\\\")
+        macro(f"fiveHold{k}", pct(HO.loc[g]))
+    macro("fiveShQual", pct(IN.loc["general quality"].share, 3))
+    body = ("\\begin{table}[htbp]\n\\centering\n\\caption{Shapley decomposition of the log-likelihood gain over uniform "
+            "attachment, five groups (main specification: first adoptions, $(d{+}1)$ PPS candidate sets, no FE). "
+            f"In-sample shares with 95\\% multiplier-bootstrap intervals ({int(IN.reps.iloc[0])} replicates, authors "
+            "resampled); holdout = share of the mean per-choice gain on the last 10\\% of choices in time; LR = "
+            "likelihood-ratio statistic for dropping the group from the full model.}\n\\label{tab:shapley5}\n\\small\n"
+            "\\begin{tabular}{lrcrr}\n\\toprule\nGroup & Share (\\%) & 95\\% CI & Holdout (\\%) & LR \\\\\n\\midrule\n"
+            + "\n".join(rows) + "\n\\midrule\n"
+            f"\\multicolumn{{5}}{{l}}{{Holdout gain over uniform: {h['mean_ll'] - P['u0h']:.2f} nats/choice; top-1 / "
+            f"top-10 accuracy {pct(h['top1'])}\\% / {pct(h['top10'])}\\%}} \\\\\n\\bottomrule\n\\end{{tabular}}\n"
+            "\\end{table}\n")
+    put("tab_shapley5", body)
+    # popularity split (7 players)
+    Q = pd.read_csv(T / "v2x_popsplit_full.csv").set_index("group")
+    rows = []
+    for g, lab, k in POPSPLIT:
+        r = Q.loc[g]
+        rows.append(f"{lab} & {pct(r.share)} & [{pct(r.lo)}, {pct(r.hi)}] & {pct(r.hold_share)} \\\\")
+        macro(f"ps{k}", pct(r.share))
+        macro(f"ps{k}Lo", pct(r.lo))
+        macro(f"ps{k}Hi", pct(r.hi))
+        macro(f"ps{k}Hold", pct(r.hold_share))
+    macro("psPopTotal", pct(1 - Q.loc["nonpop"].share))
+    macro("psReps", str(int(Q.reps.iloc[0])))
+    body = ("\\begin{table}[htbp]\n\\centering\n\\caption{Popularity split: Shapley shares of the total log-likelihood "
+            "gain in a seven-player game (six popularity sub-groups and all other groups as one player; first "
+            f"adoptions, all data). 95\\% multiplier-bootstrap intervals ({int(Q.reps.iloc[0])} replicates, authors "
+            "resampled).}\n\\label{tab:popsplit}\n\\small\n\\begin{tabular}{lrcr}\n\\toprule\nPlayer & Share (\\%) & "
+            "95\\% CI & Holdout (\\%) \\\\\n\\midrule\n" + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n"
+            "\\end{table}\n")
+    put("tab_popsplit", body)
+    C = pd.read_csv(T / "v2s_P5_clogit.csv").set_index("param")
+    macro("hasDeg", f"{C.loc['has_deg'].coef:.2f}")
+    macro("hasDegMult", f"{np.exp(C.loc['has_deg'].coef):,.0f}")
+    macro("logdegFive", f"{C.loc['log_deg'].coef:.2f}")
+    Rf = pd.read_csv(T / "v2x_refit.csv").set_index("variant")
+    macro("logdegCumOnly", f"{Rf.loc['cumulative only (refit)'].coef_log_deg:.2f}")
+    # intensive margin
+    Mg = pd.read_csv(T / "v2x_margin.csv")
+    Mg = Mg[(Mg.frac == Mg.frac.max()) & (Mg.measure == "ll")].set_index("min_deg")
+    Mh = pd.read_csv(T / "v2x_margin.csv")
+    Mh = Mh[(Mh.frac == Mh.frac.max()) & (Mh.measure == "hold_ll")].set_index("min_deg")
+    rows = [f"All candidates (main) & {macro_get('nTrain')} & 100 & $\\approx$300 & {macro_get('fiveShPop')} & "
+            f"{macro_get('fiveShFit')} & {macro_get('fiveShSelf')} & {macro_get('fiveShHabit')} \\\\"]
+    for d, nm in ((1, "One"), (10, "Ten")):
+        r = Mg.loc[d]
+        rows.append(f"Candidates with $d \\ge {d}$ & {int(r.n):,} & {pct(r.kept)} & {r.set_size:.0f} & {pct(r.popularity)} "
+                    f"& {pct(r.fit)} & {pct(r.self)} & {pct(r.habit)} \\\\")
+        macro(f"margin{nm}Pop", pct(r.popularity))
+        macro(f"margin{nm}Fit", pct(r.fit))
+        macro(f"margin{nm}Kept", pct(r.kept, 0))
+        macro(f"margin{nm}Set", f"{r.set_size:.0f}")
+        macro(f"margin{nm}HoldPop", pct(Mh.loc[d].popularity))
+    body = ("\\begin{table}[htbp]\n\\centering\n\\caption{Intensive margin: the five-group decomposition when the "
+            "candidate set is restricted to models adopted at least once ($d \\ge 1$) or at least ten times "
+            "($d \\ge 10$), keeping the choices whose chosen parent meets the threshold. Kept = share of first "
+            "adoptions retained; set = mean candidate-set size. Shares in \\%, in-sample.}\n\\label{tab:margin}\n"
+            "\\small\n\\begin{tabular}{lrrrrrrr}\n\\toprule\nCandidates & Choices & Kept (\\%) & Set & Popularity & "
+            "Fit & Self-supply & Habit \\\\\n\\midrule\n" + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n"
+            "\\end{table}\n")
+    put("tab_margin", body)
+    # latent class and choice classification
+    X = pd.read_csv(T / "v2_mixture_planA.csv").set_index("quantity").value
+    for k, nm in (("pop", "Pop"), ("match", "Match"), ("self", "Self"), ("qual", "Qual")):
+        macro(f"mix{nm}", pct(float(X[f"share_{k}"])))
+    Cl = pd.read_csv(T / "v2_classify.csv").set_index("type")
+    # among choices with a demand signal (the classification needs a match index)
+    macro("clsPopAny", pct(Cl.loc["popularity-type"].share_with_signal + Cl.loc["both"].share_with_signal))
+    macro("clsFitAny", pct(Cl.loc["fit-type"].share_with_signal + Cl.loc["both"].share_with_signal))
+    macro("clsNeither", pct(Cl.loc["neither"].share_with_signal))
+
+
+def macro_get(name):
+    return MACROS[name]
+
+
 def method_numbers():
     """Numbers quoted in the revised Section 4 (sections/4_method_revised.tex)."""
     import glob
@@ -363,7 +474,10 @@ if __name__ == "__main__":
     data_numbers()
     extra_numbers()
     tab_samples()
+    results5()
     method_numbers()
     put("numbers", "% generated by scripts/paper_tables.py -- do not edit\n" +
-        "\n".join(f"\\newcommand{{\\{k}}}{{{v}}}" for k, v in sorted(MACROS.items())) + "\n")
+        "\n".join(f"\\newcommand{{\\{k}}}{{{v}}}" for k, v in sorted(MACROS.items())) + "\n" +
+        "% cleveref name for the assumption environment of Section 4 (numbers.tex is input after cleveref)\n"
+        "\\crefname{assumption}{Assumption}{Assumptions}\n")
     print(f"{len(MACROS)} macros; tables in {[str(o) for o in OUTS]}")

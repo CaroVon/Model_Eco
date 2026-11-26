@@ -48,7 +48,10 @@ from hfpa.features.text import row_cosine
 SPEC = "v2_pps"
 DAY = 86400
 S_PPS = 300
-NETS = ["SF", "QF", "EST", "SF_FE", "EST_FE"]
+NETS = ["SF", "QF", "EST", "SF_FE", "EST_FE", "SF_NOMOM", "SF_CUM"]
+# growth ablations (v2_explore.py --part refit): popularity group of the five-group model re-estimated without
+# momentum (lrec30) or with cumulative degree only (no lrec30, no log_age); SF itself equals "SF full (refit)"
+REFIT_NETS = {"SF_NOMOM": "no momentum (refit)", "SF_CUM": "cumulative only (refit)"}
 CDIR = paths.PROCESSED / "choices" / SPEC
 OUTD = CDIR / "v2_est" / "grow"
 IDX = paths.INTERIM / "v2_idx"
@@ -202,6 +205,8 @@ class Grow:
         self.feats, self.b, self.bfe = Cf["feats"], np.asarray(Cf["nofe"]["coef"]), np.asarray(Cf["fe"]["coef"])
         q = CDIR / "v2_est" / "q_ext.npy"
         self.qext = np.r_[0.0, np.load(q)] if q.exists() else None
+        rf = CDIR / "v2_explore" / "refit.pkl"
+        self.refit = pickle.load(open(rf, "rb")) if rf.exists() else None
         log(f"loaded in {time.time() - t0:.0f}s: {N:,} nodes, {len(E):,} edges, {len(ch):,} choices, "
             f"{self.sim_choice.sum():,} simulated first choices")
 
@@ -224,6 +229,10 @@ class Grow:
         elif net == "EST_FE":
             w = self.bfe[:F].copy()
             fe = np.r_[0.0, self.bfe[F:]]
+        elif net in REFIT_NETS:
+            rc = self.refit[REFIT_NETS[net]]["coef"]
+            ip = gi(["pop"])
+            w[ip] = [rc.get(self.feats[i], 0.0) for i in ip]
         return w, fe
 
     # ------------------------------------------------------------ state
@@ -539,7 +548,7 @@ def collect():
     r = pd.read_parquet(files[0])
     res.append(dict(network="REAL", seed=0, **metrics(r.real_parent.to_numpy(), ch.t.loc[r.choice_id].to_numpy())))
     D = pd.DataFrame(res)
-    order = {n: i for i, n in enumerate(["SF", "SF_FE", "EST", "EST_FE", "REAL", "QF"])}
+    order = {n: i for i, n in enumerate(["SF", "SF_NOMOM", "SF_CUM", "SF_FE", "EST", "EST_FE", "REAL", "QF"])}
     S = D.groupby("network").agg(["mean", "std"])
     S.columns = [f"{a}_{b}" for a, b in S.columns]
     S = S.drop(columns=["seed_mean", "seed_std"]).reset_index()
@@ -548,7 +557,8 @@ def collect():
     write(S, "v2_grow", "Growth networks with feedback on the full market (PPS candidate sets drawn from the simulated "
           "degrees; plan-A first adoptions; mean and SD over seeds)",
           "SF = popularity group, EST = all four groups (no-FE fit), QF = quality + match + externally explained FE; "
-          "_FE = with hub FE (FE fit). REAL = the observed first adoptions of the same events.")
+          "_FE = with hub FE (FE fit); SF_NOMOM / SF_CUM = popularity group re-estimated without momentum / with "
+          "cumulative degree only. REAL = the observed first adoptions of the same events.")
     print(S.to_string())
 
 

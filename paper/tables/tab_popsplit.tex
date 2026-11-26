@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\caption{Popularity split: Shapley shares of the total log-likelihood gain in a seven-player game (six popularity sub-groups and all other groups as one player; first adoptions, all data). 95\% multiplier-bootstrap intervals (20 replicates, authors resampled).}
+\label{tab:popsplit}
+\small
+\begin{tabular}{lrcr}
+\toprule
+Player & Share (\%) & 95\% CI & Holdout (\%) \\
+\midrule
+Used at all (\texttt{has\_deg}) & 20.3 & [20.1, 20.5] & 19.7 \\
+Cumulative adoptions (\texttt{log\_deg}) & 23.4 & [23.2, 23.6] & 24.5 \\
+Momentum, 30 days (\texttt{lrec30}) & 24.9 & [24.5, 25.2] & 23.4 \\
+Visibility (organization, re-distribution, quantized, library) & 17.2 & [16.9, 17.5] & 18.5 \\
+Local (co-users, dataset co-use) & 4.8 & [4.5, 5.0] & 3.4 \\
+Lifecycle (age, legacy generation) & 2.5 & [2.3, 2.7] & 3.6 \\
+All non-popularity groups & 6.8 & [6.5, 7.3] & 6.9 \\
+\bottomrule
+\end{tabular}
+\end{table}
