@@ -11,6 +11,7 @@ C  pioneers   (CPU) early adopters: for parents with >= K first adoptions, the t
               adoptions (birth-quarter and modality FE)?
 D  sfvar      (CPU) full-market popularity growth with feedback (v2_networks.SF), coefficients ablated: full, no
               momentum, no age, cumulative only; concentration and quarterly leader turnover vs the real network.
+W  within     (CPU) Section 5.4: within-set variation of the group indices and match-index ties.
 E  platform   (CPU) SIR expected adoption counts on real candidate sets with match x {1,2,4} and popularity x
               {1,0.5}: concentration, mean match / popularity index of the chosen, implied retention change.
 Subsamples: authors drawn at fraction f (seed s); all their first adoptions are kept (train and holdout).
@@ -327,6 +328,43 @@ def run_platform_unc():
         log(f"E draw {d}: " + "; ".join(f"{k} eff {v['eff']:.0f}" for k, v in m.items()))
     pickle.dump(res, open(OUT / "platform_unc.pkl", "wb"))
 
+def run_within():
+    """Section 5.4: within-set variation of each group's utility index I_g = theta_g . x (P5, no FE) on the training
+    choices' PPS sets, and tie statistics of the choice classification (v2_welfare.py --classify)."""
+    P = pickle.load(open(cdir(SPEC) / "v2_samples" / "P5" / "fit.pkl", "rb"))
+    feats, b, groups = P["feats"], P["nofe"]["coef"], P["groups"]
+    rows, ch = load_rows(SPEC, "planA")
+    tr, _ = split(rows, ch)
+    del rows
+    tr = tr.sort_values("choice_id", kind="stable").reset_index(drop=True)
+    X = tr[feats].to_numpy(np.float64)
+    cid = tr.choice_id.to_numpy()
+    st = np.r_[0, np.flatnonzero(np.diff(cid)) + 1]
+    ln = np.diff(np.r_[st, len(cid)])
+    chosen = tr.chosen.to_numpy() == 1
+    out = []
+    for g, v in groups.items():
+        if not v:
+            continue
+        idx = [feats.index(f) for f in v]
+        I = X[:, idx] @ b[idx]
+        mu = np.add.reduceat(I, st) / ln
+        sd = np.sqrt(np.maximum(np.add.reduceat(I * I, st) / ln - mu ** 2, 0))
+        rg = np.maximum.reduceat(I, st) - np.minimum.reduceat(I, st)
+        out.append(dict(group=g, sd_median=np.median(sd), sd_mean=sd.mean(), range_median=np.median(rg),
+                        chosen_minus_mean=(I[chosen] - mu).mean(), share_constant=(sd < 1e-9).mean(),
+                        n_choices=len(st), set_size=ln.mean()))
+    write(pd.DataFrame(out), "v2x_within", "5.4: within-set variation of the group utility indices (P5, no FE, "
+          "training first adoptions, PPS sets)")
+    K = pd.read_parquet(cdir(SPEC) / "v2_est" / "classify.parquet")
+    s = K.signal
+    write(pd.DataFrame([dict(n=len(K), n_signal=int(s.sum()), set_size=K.n[s].mean(), rand_best=(1 / K.n[s]).mean(),
+                             chosen_at_max=(K.p_fit[s] > 0).mean(), rand_at_max=(K.ties_match[s] / K.n[s]).mean(),
+                             multi_tie=(K.ties_match[s] > 1).mean(), ties_mean=K.ties_match[s].mean(),
+                             ties_median=K.ties_match[s].median(), pop_ties_mean=K.ties_pop[s].mean())]),
+          "v2x_ties", "5.4: ties at the highest match index (comparison set = sampled candidates with d > 0 plus the "
+          "chosen parent; choices with a demand signal)")
+
 
 # ---------------------------------------------------------------- collect
 def collect():
@@ -381,7 +419,7 @@ def collect():
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", required=True, choices=["gpu", "cpu", "pioneers", "sfvar", "platform", "collect", "popboot",
-                                                     "refit", "sfrefit", "platform_unc"])
+                                                     "refit", "sfrefit", "platform_unc", "within"])
     ap.add_argument("--task", type=int, default=int(__import__("os").environ.get("SLURM_ARRAY_TASK_ID", 0)))
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--fracs", type=float, nargs="*", default=[0.1, 0.25, 0.5])
@@ -404,4 +442,6 @@ if __name__ == "__main__":
         run_sfrefit(a.seeds)
     if a.part == "platform_unc":
         run_platform_unc()
+    if a.part == "within":
+        run_within()
     collect()
