@@ -52,8 +52,13 @@ NETS = ["SF", "QF", "EST", "SF_FE", "EST_FE", "SF_NOMOM", "SF_CUM"]
 # growth ablations (v2_explore.py --part refit): popularity group of the five-group model re-estimated without
 # momentum (lrec30) or with cumulative degree only (no lrec30, no log_age); SF itself equals "SF full (refit)"
 REFIT_NETS = {"SF_NOMOM": "no momentum (refit)", "SF_CUM": "cumulative only (refit)"}
+# network-level Shapley (v2_mech.py): S5_<bits> = the five-group model re-estimated on a subset of the groups
+# (coefficients of v2_samples/P5/fit.pkl fits[subset]); bits over P5_ORDER, e.g. S5_10100 = popularity + match
+P5_ORDER = ["pop", "qual", "match", "self", "habit"]
+S5_NETS = ["S5_" + format(i, "05b") for i in range(32)]
 CDIR = paths.PROCESSED / "choices" / SPEC
 OUTD = CDIR / "v2_est" / "grow"
+MECHD = OUTD / "mech"  # subset networks and truncated horizons (kept out of --collect)
 IDX = paths.INTERIM / "v2_idx"
 T_START = time.time()
 
@@ -207,6 +212,8 @@ class Grow:
         self.qext = np.r_[0.0, np.load(q)] if q.exists() else None
         rf = CDIR / "v2_explore" / "refit.pkl"
         self.refit = pickle.load(open(rf, "rb")) if rf.exists() else None
+        p5 = CDIR / "v2_samples" / "P5" / "fit.pkl"
+        self.p5 = pickle.load(open(p5, "rb")) if p5.exists() else None
         log(f"loaded in {time.time() - t0:.0f}s: {N:,} nodes, {len(E):,} edges, {len(ch):,} choices, "
             f"{self.sim_choice.sum():,} simulated first choices")
 
@@ -229,6 +236,12 @@ class Grow:
         elif net == "EST_FE":
             w = self.bfe[:F].copy()
             fe = np.r_[0.0, self.bfe[F:]]
+        elif net.startswith("S5_"):
+            S = [g for g, bit in zip(P5_ORDER, net[3:]) if bit == "1"]
+            gr, f5 = self.p5["groups"], self.p5["feats"]
+            cols = [f for f in f5 if any(f in gr[g] for g in S)]
+            c = dict(zip(cols, self.p5["fits"][frozenset(S)]["coef"]))
+            w = np.array([c.get(f, 0.0) for f in self.feats])
         elif net in REFIT_NETS:
             rc = self.refit[REFIT_NETS[net]]["coef"]
             ip = gi(["pop"])
@@ -412,7 +425,7 @@ class Grow:
         return Xf, self.fe[J], rows
 
     # ------------------------------------------------------------ main loop
-    def run(self, net=None, seed=0, check_months=None, save_rows=False):
+    def run(self, net=None, seed=0, check_months=None, save_rows=False, until=None):
         """net=None with check_months: validation (real parents, real candidate sets)."""
         self.reset()
         rng = np.random.default_rng(1000 + seed)
@@ -426,6 +439,8 @@ class Grow:
         last_log = time.time()
         for g0, g1 in zip(starts, ends):
             t = int(self.e_t[g0])
+            if until is not None and pd.Timestamp(t, unit="s").strftime("%Y-%m") > until:
+                break
             while self.recq and self.recq[0][0] <= t - 30 * DAY:
                 _, p = self.recq.popleft()
                 self.rec[p] -= 1
@@ -523,12 +538,14 @@ def check(months):
     return T
 
 
-def simulate(net, seed, save_rows):
+def simulate(net, seed, save_rows, until=None):
     g = Grow()
-    OUTD.mkdir(parents=True, exist_ok=True)
-    log(f"=== {net} seed {seed}")
-    res, rows = g.run(net=net, seed=seed, save_rows=save_rows)
-    res.to_parquet(OUTD / f"{net}_{seed}.parquet", index=False)
+    od = MECHD if (until or net.startswith("S5_")) else OUTD
+    od.mkdir(parents=True, exist_ok=True)
+    log(f"=== {net} seed {seed} until {until or 'end'}")
+    res, rows = g.run(net=net, seed=seed, save_rows=save_rows, until=until)
+    tag = f"{net}__{until or 'full'}__{seed}" if od == MECHD else f"{net}_{seed}"
+    res.to_parquet(od / f"{tag}.parquet", index=False)
     if rows is not None:
         rows.to_parquet(OUTD / f"{net}_{seed}_rows.parquet", index=False)
     log(f"{net} seed {seed}: {len(res):,} simulated choices; same parent as real {np.mean(res.sim_parent == res.real_parent):.3f}")
@@ -596,7 +613,9 @@ def recovery():
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", nargs="*")
-    ap.add_argument("--net", choices=NETS)
+    ap.add_argument("--net", choices=NETS + S5_NETS)
+    ap.add_argument("--until", help="stop after this month (YYYY-MM); output in grow/mech/")
+    ap.add_argument("--s5-task", type=int, help="array id -> S5 subset id // 2, seed id % 2")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--task", type=int, help="array task id -> (net, seed): net = NETS[id // 5], seed = id % 5")
     ap.add_argument("--save-rows", action="store_true")
@@ -612,4 +631,6 @@ if __name__ == "__main__":
     else:
         if a.task is not None:
             a.net, a.seed = NETS[a.task // 5], a.task % 5
-        simulate(a.net, a.seed, a.save_rows or (a.seed == 0 and a.net in ("SF", "QF", "EST")))
+        if a.s5_task is not None:
+            a.net, a.seed = S5_NETS[a.s5_task // 2], a.s5_task % 2
+        simulate(a.net, a.seed, a.save_rows or (a.seed == 0 and a.net in ("SF", "QF", "EST") and not a.until), a.until)
