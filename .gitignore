@@ -10,6 +10,7 @@ external/choose2grow/
 
 # Overleaf upload bundles
 *_overleaf.zip
+/TODO_Foundation_Model_Race.zip
 
 # Overleaf project "TODO-Foundation Model Race": git clone of the Overleaf project (its own repo)
 /paper/TODO-Foundation Model Race/

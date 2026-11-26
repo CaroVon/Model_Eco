@@ -153,10 +153,21 @@ def build():
             child_docs.append(tokens(keep, names))
             child_nodes.append(v)
     del paras, keys
+    # P25: extra candidate documents (historical card versions, scripts/p25_card_history.py --prep). Same template
+    # rule (paragraph keys banned in the snapshot build) and names; they do not change the paragraph statistics.
+    extra = os.environ.get("V2_TEXT_EXTRA")
+    extra_docs, extra_vid = [], np.zeros(0, np.int64)
+    if extra:
+        XE = pd.read_parquet(extra)
+        extra_vid = XE.vid.to_numpy(np.int64)
+        for ps in XE.paras:
+            ps = list(ps)
+            extra_docs.append(tokens([p for p in ps if (i := kid.get(para_key(p))) is None or not banned[i]], names))
+        log(f"extra candidate documents {len(extra_docs):,}")
     log(f"documents: child {len(child_docs):,}, candidate {len(cand_docs):,}; {dict(stats)}")
     ntok_c = np.array([len(d) for d in child_docs])
     ntok_p = np.array([len(d) for d in cand_docs])
-    X, voc = tfidf(child_docs + cand_docs)
+    X, voc = tfidf(child_docs + cand_docs + extra_docs)
     log(f"tf-idf {X.shape}, nnz {X.nnz:,}")
     N = len(nodes)
     crow = np.full(N, -1, np.int64)
@@ -169,7 +180,9 @@ def build():
     nt_cand[cnode] = ntok_p
     dest = Path(os.environ.get("V2_TEXT_OUT", paths.INTERIM))
     sp.save_npz(dest / "v2_text_tfidf.npz", X)
-    np.savez(dest / "v2_text_rows.npz", crow=crow, prow=prow, ntok_child=nt_child, ntok_cand=nt_cand)
+    erow = len(child_nodes) + len(cnode) + np.arange(len(extra_docs))  # rows of the extra documents, by vid order
+    np.savez(dest / "v2_text_rows.npz", crow=crow, prow=prow, ntok_child=nt_child, ntok_cand=nt_cand,
+             extra_vid=extra_vid, extra_row=erow, extra_ntok=np.array([len(d) for d in extra_docs], np.int32))
     tc = pd.Series(ntok_c)
     md = ["# v2 card text build", "",
           f"cards {len(C):,}; unique paragraph keys {K:,}; frequent {int((df >= MAX_PARA_DF).sum()):,}; banned incl. "
@@ -179,7 +192,7 @@ def build():
           "", "child documents by token count (after removal):", "",
           pd.DataFrame({"min_tokens": [1, 5, 10, 20, 50],
                         "share_of_child_cards": [(tc >= k).mean() for k in (1, 5, 10, 20, 50)]}).to_markdown(index=False)]
-    (dest / "text_build.md" if sub else OUT / "text_build.md").write_text("\n".join(md) + "\n")
+    (dest / "text_build.md" if (sub or dest != paths.INTERIM) else OUT / "text_build.md").write_text("\n".join(md) + "\n")
     log("\n".join(md))
 
 
