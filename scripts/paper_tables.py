@@ -256,12 +256,12 @@ def extra_numbers():
 def tab_samples():
     """v2.1: sample selection (U / D / P), author weights, top-1% authors, author types; five groups."""
     R = pd.read_csv(T / "v2s_robustness.csv").set_index("config")
-    lab = {"P5": "First adoptions (main)", "P5top": "First adoptions, top 1\\% of authors dropped",
-           "P5a": "First adoptions, authors weighted equally", "D5": "All 24h decisions",
-           "D5a": "All 24h decisions, authors weighted equally", "D5top": "All 24h decisions, top 1\\% dropped",
-           "U5": "All uploads (no session merge)"}
-    tlab = {"indiv_light": "Individuals, $<$10 models", "indiv_mid": "Individuals, 10--99 models",
-            "indiv_heavy": "Individuals, $\\ge$100 models", "org_other": "Other organizations",
+    lab = {"P5": "P: first adoptions (main)", "P5top": "P, top 1\\% of authors dropped",
+           "P5a": "P, authors weighted equally", "D5": "D: all 24h decisions",
+           "D5a": "D, authors weighted equally", "D5top": "D, top 1\\% of authors dropped",
+           "U5": "U: all uploads"}
+    tlab = {"indiv_light": "Individuals, $<$10 models", "indiv_mid": "Individuals, 10--99",
+            "indiv_heavy": "Individuals, $\\ge$100", "org_other": "Other organizations",
             "org_redistributor": "Re-distribution accounts", "org_major": "Major organizations"}
     f = lambda r, g: (f"{pct(r[g])}" + (f" [{pct(r[g + ' lo'])}, {pct(r[g + ' hi'])}]"
                                          if g + " lo" in r and pd.notna(r[g + " lo"]) else ""))
@@ -272,7 +272,8 @@ def tab_samples():
     rows.append("\\midrule\n\\multicolumn{8}{l}{\\emph{First adoptions by author type}} \\\\")
     rows += [line(tlab[t], R.loc[f"P5_{t}"]) for t in tlab if f"P5_{t}" in R.index]
     body = ("\\begin{table}[t]\n\\centering\n\\caption{Shapley shares (\\%, in-sample, no FE) by sample, weights and "
-            "author type; 95\\% multiplier-bootstrap intervals by author.}\n\\label{tab:samples}\n\\small\n"
+            "author type; 95\\% multiplier-bootstrap intervals by author. P, D, U: the samples of \\cref{sec:samples}.}\n"
+            "\\label{tab:samples}\n\\footnotesize\n\\setlength{\\tabcolsep}{3pt}\n"
             "\\begin{tabular}{lrrrrrrr}\n\\toprule\nSample & Choices & Authors & Popularity & Fit & Self-supply & "
             "Habit & Fit/Pop \\\\\n\\midrule\n" + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n\\end{table}\n")
     put("tab_samples", body)
