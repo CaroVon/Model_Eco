@@ -181,6 +181,34 @@ def count_before(keys_sorted, key, t):
     return np.searchsorted(keys_sorted, q + t, "left") - np.searchsorted(keys_sorted, q, "left")
 
 
+class SuccIndex:
+    """Succession features from node metadata only (shared by the estimation here and the growth simulator):
+    n_newer(l, t) = models of the candidate's uploader born in (birth_l, t) with the same modality, root status and
+    size class (round(log2 params_b); unknown = its own class)."""
+    def __init__(self, nodes=None):
+        if nodes is None:
+            nodes = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet",
+                                    columns=["birth", "author_code", "is_root", "modality_code", "params_b"])
+        self.birth = nodes.birth.to_numpy(np.int64)
+        pb = nodes.params_b.to_numpy(np.float64)
+        size = np.where(np.isfinite(pb) & (pb > 0), np.round(np.log2(np.where(pb > 0, pb, 1))), -99).astype(np.int64)
+        self.grp = pd.factorize(pd.MultiIndex.from_arrays([nodes.author_code.to_numpy(), nodes.modality_code.to_numpy(),
+                                                           nodes.is_root.to_numpy(), size]))[0].astype(np.int64)
+        self.k_grp = np.sort(self.grp * BIG + self.birth)
+
+    def n_newer(self, c, t):
+        g = self.grp[c]
+        return np.maximum(count_before(self.k_grp, g, t) - count_before(self.k_grp, g, self.birth[c] + 1), 0)
+
+    def matrix(self, c, t):
+        """columns SUCC = (superseded, log_newer)."""
+        n = self.n_newer(np.asarray(c, np.int64), np.asarray(t, np.int64))
+        return np.column_stack([(n > 0).astype(np.float64), np.log1p(n)])
+
+
+SUCC = ["superseded", "log_newer"]
+
+
 def brake_features(rows, t_of_choice):
     from hfpa.features.groups import MAIN
     nodes = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet",
@@ -198,12 +226,7 @@ def brake_features(rows, t_of_choice):
     d_own = count_before(k_par, c, t)
     d_org = count_before(k_org, org[c], t)
     F = {"org_eco": np.log1p(np.maximum(d_org - d_own, 0)).astype(np.float32)}
-    pb = nodes.params_b.to_numpy(np.float64)
-    size = np.where(np.isfinite(pb) & (pb > 0), np.round(np.log2(np.where(pb > 0, pb, 1))), -99).astype(np.int64)
-    grp = pd.factorize(pd.MultiIndex.from_arrays([nodes.author_code.to_numpy(), nodes.modality_code.to_numpy(),
-                                                  nodes.is_root.to_numpy(), size]))[0].astype(np.int64)
-    k_grp = np.sort(grp * BIG + birth)
-    n_newer = np.maximum(count_before(k_grp, grp[c], t) - count_before(k_grp, grp[c], birth[c] + 1), 0)
+    n_newer = SuccIndex(nodes).n_newer(c, t)
     F["superseded"] = (n_newer > 0).astype(np.float32)
     F["log_newer"] = np.log1p(n_newer).astype(np.float32)
     # controls (p2 round 2): a prolific uploader vs replacement by a substitute
@@ -334,9 +357,49 @@ def part_s5():
           "uniform network (empty subset). Shares can be negative (a dispersing group). Mean over seeds.")
 
 
+def part_succ_full():
+    """A, step 1: full-data fits with the succession features (five groups + succession; popularity + succession),
+    coefficients saved for the growth simulator (v2_grow.py SUCC_FULL / SUCC_POP) -> v2_mech/succ_fit.pkl,
+    v2m_succ_full."""
+    from hfpa.features.groups import GROUPS5
+    from hfpa.models.clogit import CLogit, to_buckets, uniform_ll
+    from hfpa.v2data import drop_constant
+    rows, ch = load_rows(SPEC, "planA")
+    t = pd.read_parquet(CDIR / "decisions.parquet", columns=["choice_id", "t"]).set_index("choice_id").t
+    X = SuccIndex().matrix(rows.cand_id.to_numpy(), t.reindex(rows.choice_id).to_numpy(np.int64))
+    for i, c in enumerate(SUCC):
+        rows[c] = X[:, i].astype(np.float32)
+    tr, ho = split(rows, ch)
+    del rows
+    P = pickle.load(open(CDIR / "v2_samples" / "P5" / "fit.pkl", "rb"))
+    out, save = [], {}
+    for name, base_key, groups in (("SUCC_FULL", frozenset(GROUPS5), list(GROUPS5)), ("SUCC_POP", frozenset(["pop"]), ["pop"])):
+        feats = drop_constant(tr, sum((GROUPS5[g] for g in groups), []) + SUCC)
+        D, Dh = to_buckets(tr, feats), to_buckets(ho, feats)
+        m = CLogit(len(feats))
+        res = m.fit(D, cluster=ch.author.reindex(D.choice_ids).to_numpy())
+        hold = float(m.ll_per_choice(Dh).mean())
+        base = P["fits"][base_key]
+        save[name] = dict(feats=feats, coef=np.asarray(res["coef"]), se_cl=np.asarray(res["se_cl"]), ll=res["ll"],
+                          hold_ll=hold)
+        rec = dict(model=name, n=D.n, ll=res["ll"], LR=2 * (res["ll"] - base["ll"]),
+                   hold_gain=hold - float(uniform_ll(Dh).mean()), hold_gain_base=base["hold_ll"] - P["u0h"])
+        for x in SUCC + ["log_deg", "lrec30", "has_deg", "task_hist"]:
+            if x in feats:
+                i = feats.index(x)
+                rec[f"b_{x}"], rec[f"se_{x}"] = float(res["coef"][i]), float(res["se_cl"][i])
+        out.append(rec)
+        print(rec, flush=True)
+        del D, Dh
+    pickle.dump(save, open(OUT / "succ_fit.pkl", "wb"))
+    write(pd.DataFrame(out), "v2m_succ_full", "A: full-data fits with the succession features (training first adoptions)",
+          "LR against the same model without succession (P5 subset fits); hold_gain = holdout mean log-likelihood "
+          "over uniform, nats per choice (base = without succession).")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5"])
+    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full"])
     ap.add_argument("--fracs", type=float, nargs="*", default=[0.1, 0.25, 0.5])
     ap.add_argument("--seeds", type=int, nargs="*", default=[0, 1])
     a = ap.parse_args()
@@ -349,6 +412,8 @@ if __name__ == "__main__":
         part_corr()
     if a.part == "s5":
         part_s5()
+    if a.part == "succ_full":
+        part_succ_full()
     if a.part == "p2":
         part_p2(a.fracs, a.seeds)
     if a.part == "p2b":

@@ -11,4 +11,4 @@
 source ~/miniconda3/etc/profile.d/conda.sh; conda activate hfpa
 source /home/caroyf/myproject/ACMEC/activate.sh
 export OMP_NUM_THREADS=2
-python scripts/v2_grow.py --s5-task $SLURM_ARRAY_TASK_ID ${UNTIL:+--until $UNTIL}
+python scripts/v2_grow.py --s5-task $SLURM_ARRAY_TASK_ID ${UNTIL:+--until $UNTIL} ${NSEEDS:+--s5-nseeds $NSEEDS}
