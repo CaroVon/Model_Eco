@@ -397,9 +397,157 @@ def part_succ_full():
           "over uniform, nats per choice (base = without succession).")
 
 
+# ---------------------------------------------------------------- three diagnostics of the feedback gap
+HORIZONS = [("<= 2024-03", "2024-03"), ("<= 2024-09", "2024-09"), ("full", "9999-12")]
+
+
+def part_support():
+    """1. Support check: how far does feedback push the popularity state beyond the real data? Chosen parents and
+    all candidates, log_deg and lrec30, simulated (v2_grow EST / SF, seed 0, full run with feedback) vs real; by
+    horizon (cumulative windows) -> v2m_support."""
+    cols = ["choice_id", "chosen", "log_deg", "lrec30"]
+    real, _ = load_rows(SPEC, "planA", cols=["log_deg", "lrec30"])
+    real = real[cols]
+    mon = pd.read_parquet(CDIR / "decisions.parquet", columns=["choice_id", "t"]).set_index("choice_id").t
+    mon = pd.to_datetime(mon, unit="s").dt.strftime("%Y-%m")
+    S = {"REAL": real}
+    for net in ("EST", "SF"):
+        S[net] = pd.read_parquet(OUTD / f"{net}_0_rows.parquet", columns=cols)
+    out = []
+    for hlab, hmax in HORIZONS:
+        R = S["REAL"][mon.reindex(S["REAL"].choice_id).to_numpy() <= hmax]
+        rmax = {v: float(R[v].max()) for v in ("log_deg", "lrec30")}
+        rq = {v: float(R.loc[R.chosen == 1, v].quantile(0.99)) for v in ("log_deg", "lrec30")}
+        for net, X in S.items():
+            X = X[mon.reindex(X.choice_id).to_numpy() <= hmax]
+            C = X[X.chosen == 1]
+            for v in ("log_deg", "lrec30"):
+                q = C[v].quantile([0.5, 0.9, 0.99]).to_numpy()
+                out.append(dict(horizon=hlab, network=net, var=v, choices=len(C), chosen_p50=q[0], chosen_p90=q[1],
+                                chosen_p99=q[2], chosen_max=float(C[v].max()), cand_max=float(X[v].max()),
+                                chosen_above_real_max=float((C[v] > rmax[v]).mean()),
+                                chosen_above_real_p99=float((C[v] > rq[v]).mean()),
+                                cand_above_real_max=float((X[v] > rmax[v]).mean())))
+    write(pd.DataFrame(out), "v2m_support", "Diagnostic 1: popularity state of chosen parents and candidates, "
+          "simulated with feedback (seed 0) vs real, cumulative horizons",
+          "log_deg = log max(d, 1); lrec30 = log(1 + adoptions in the last 30 days). above_real_max / p99 = share "
+          "of simulated chosen parents (or candidate rows) beyond the real maximum over all candidates / the real 99th "
+          "percentile of chosen parents in the same window.")
+
+
+# saturation: piecewise-linear (hinge) terms on top of log_deg and lrec30
+KNOTS = {"log_deg": [np.log(10), np.log(100), np.log(1000)], "lrec30": [np.log1p(3), np.log1p(10), np.log1p(30), np.log1p(100)]}
+HINGE = [f"{v}_h{i}" for v, ks in KNOTS.items() for i in range(len(ks))]
+
+
+def hinge(log_deg, lrec30):
+    """columns HINGE: max(0, x - knot)."""
+    x = {"log_deg": np.asarray(log_deg, np.float64), "lrec30": np.asarray(lrec30, np.float64)}
+    return np.column_stack([np.maximum(x[v] - k, 0) for v, ks in KNOTS.items() for k in ks])
+
+
+def part_sat(fracs, seeds):
+    """2. Saturation, estimation tier: five-group model with hinge terms on log_deg and lrec30 (author
+    subsamples); segment slopes, LR, holdout gain -> v2m_sat_fit; coefficients of every fit -> v2_mech/sat_fit.pkl
+    (the growth tier uses frac 0.5 seed 0, base vs spline)."""
+    from hfpa.features.groups import GROUPS5
+    from hfpa.models.clogit import CLogit, to_buckets, uniform_ll
+    from v2_explore import subsample
+    from hfpa.v2data import drop_constant
+    rows, ch = load_rows(SPEC, "planA")
+    H = hinge(rows.log_deg.to_numpy(), rows.lrec30.to_numpy())
+    for i, c in enumerate(HINGE):
+        rows[c] = H[:, i].astype(np.float32)
+    ch_r = rows[rows.chosen == 1]
+    print("chosen parents above each knot:", {c: float((ch_r[c] > 0).mean()) for c in HINGE}, flush=True)
+    base = sum(GROUPS5.values(), [])
+    out, save = [], {}
+    for f in fracs:
+        for s in (seeds if f < 1 else [0]):
+            R = subsample(rows, ch, f, s)
+            tr, ho = split(R, ch)
+            res_b = None
+            for name, feats0 in (("base", base), ("spline", base + HINGE)):
+                feats = drop_constant(tr, feats0)
+                D, Dh = to_buckets(tr, feats), to_buckets(ho, feats)
+                m = CLogit(len(feats))
+                res = m.fit(D, cluster=ch.author.reindex(D.choice_ids).to_numpy())
+                hold = float(m.ll_per_choice(Dh).mean() - uniform_ll(Dh).mean())
+                c = dict(zip(feats, res["coef"]))
+                se = dict(zip(feats, res["se_cl"]))
+                save[(f, s, name)] = dict(feats=feats, coef=np.asarray(res["coef"]))
+                rec = dict(frac=f, seed=s, model=name, n=D.n, ll=res["ll"], hold_gain=hold)
+                if name == "base":
+                    res_b = res
+                else:
+                    rec["LR"] = 2 * (res["ll"] - res_b["ll"])
+                for v, ks in KNOTS.items():  # slope in each segment = base slope + sum of hinge coefficients so far
+                    sl = c.get(v, 0.0)
+                    rec[f"{v}_slope_0"] = sl
+                    for i in range(len(ks)):
+                        sl += c.get(f"{v}_h{i}", 0.0)
+                        rec[f"{v}_slope_{i + 1}"] = sl
+                        if f"{v}_h{i}" in se:
+                            rec[f"{v}_h{i}_se"] = float(se[f"{v}_h{i}"])
+                out.append(rec)
+                print(rec, flush=True)
+                del D, Dh
+    pickle.dump(save, open(OUT / "sat_fit.pkl", "wb"))
+    write(pd.DataFrame(out), "v2m_sat_fit", "Diagnostic 2: saturation of the popularity response, five-group model "
+          "with piecewise-linear log_deg and lrec30 (author subsamples)",
+          "Knots: log_deg at d = 10, 100, 1000; lrec30 at 3, 10, 30, 100 recent adoptions. slope_i = utility slope in "
+          "segment i (0 = below the first knot). LR = spline against base on the same subsample.")
+
+
+def part_xi(fracs, seeds):
+    """3. Persistence of the hub premium xi: five-group model + hub FE estimated separately on the first and the
+    second half (in time) of the training choices of each author subsample; correlation of the FE across halves
+    for hubs chosen at least MIN_CH times in both halves, raw and corrected for estimation noise -> v2m_xi,
+    v2_mech/xi_<f>_<s>.parquet (per-hub estimates)."""
+    from hfpa.features.groups import GROUPS5
+    from hfpa.models.clogit import CLogit, to_buckets
+    from v2_explore import subsample
+    from hfpa.v2data import drop_constant
+    MIN_CH, N_FE = 5, 500
+    rows, ch = load_rows(SPEC, "planA")
+    base = sum(GROUPS5.values(), [])
+    out = []
+    for f in fracs:
+        for s in (seeds if f < 1 else [0]):
+            R = subsample(rows, ch, f, s)
+            tr, _ = split(R, ch)
+            t = ch.t.reindex(tr.choice_id).to_numpy()
+            cut = np.median(ch.t.reindex(np.unique(tr.choice_id)).to_numpy())
+            est = {}
+            for half, mask in (("first", t < cut), ("second", t >= cut)):
+                X = tr[mask].reset_index(drop=True)
+                feats = drop_constant(X, base)
+                D = to_buckets(X, feats, fe_col="fe")
+                m = CLogit(len(feats), n_fe=N_FE, l2_fe=1e-4)
+                res = m.fit(D, cluster=None, se=True)
+                nch = np.bincount(X.fe.to_numpy()[X.chosen.to_numpy() == 1], minlength=N_FE + 1)[1:]
+                est[half] = pd.DataFrame({"hub": np.arange(1, N_FE + 1), "phi": res["coef"][len(feats):],
+                                          "se": res["se"][len(feats):], "n_chosen": nch})
+            E = est["first"].merge(est["second"], on="hub", suffixes=("_1", "_2"))
+            E.to_parquet(OUT / f"xi_{f}_{s}.parquet", index=False)
+            K = E[(E.n_chosen_1 >= MIN_CH) & (E.n_chosen_2 >= MIN_CH)]
+            r = float(np.corrcoef(K.phi_1, K.phi_2)[0, 1]) if len(K) > 2 else np.nan
+            rel = lambda p, e: max(1 - np.mean(e ** 2) / np.var(p), 1e-6)
+            r1, r2 = rel(K.phi_1, K.se_1), rel(K.phi_2, K.se_2)
+            out.append(dict(frac=f, seed=s, hubs_both=len(K), corr=r,
+                            spearman=float(K[["phi_1", "phi_2"]].corr("spearman").iloc[0, 1]) if len(K) > 2 else np.nan,
+                            reliability_1=r1, reliability_2=r2, corr_noise_corrected=r / np.sqrt(r1 * r2),
+                            sd_phi_1=float(K.phi_1.std()), sd_phi_2=float(K.phi_2.std())))
+            print(out[-1], flush=True)
+    write(pd.DataFrame(out), "v2m_xi", "Diagnostic 3: persistence of the hub premium - FE estimated on the two time "
+          "halves of the training choices (author subsamples)",
+          f"Hubs chosen >= {MIN_CH} times in both halves. Noise-corrected correlation = raw / sqrt(rel_1 rel_2), "
+          "rel = 1 - mean(se^2) / var(phi) (analytic SE).")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full"])
+    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full", "support", "sat", "xi"])
     ap.add_argument("--fracs", type=float, nargs="*", default=[0.1, 0.25, 0.5])
     ap.add_argument("--seeds", type=int, nargs="*", default=[0, 1])
     a = ap.parse_args()
@@ -414,6 +562,12 @@ if __name__ == "__main__":
         part_s5()
     if a.part == "succ_full":
         part_succ_full()
+    if a.part == "support":
+        part_support()
+    if a.part == "sat":
+        part_sat(a.fracs, a.seeds)
+    if a.part == "xi":
+        part_xi(a.fracs, a.seeds)
     if a.part == "p2":
         part_p2(a.fracs, a.seeds)
     if a.part == "p2b":

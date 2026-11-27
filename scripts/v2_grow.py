@@ -48,7 +48,9 @@ from hfpa.features.text import row_cosine
 SPEC = "v2_pps"
 DAY = 86400
 S_PPS = 300
-NETS = ["SF", "QF", "EST", "SF_FE", "EST_FE", "SF_NOMOM", "SF_CUM", "SUCC_FULL", "SUCC_POP"]
+NETS = ["SF", "QF", "EST", "SF_FE", "EST_FE", "SF_NOMOM", "SF_CUM", "SUCC_FULL", "SUCC_POP", "SAT_BASE", "SAT_SPL"]
+# SAT_BASE / SAT_SPL: five-group model without / with hinge terms on log_deg and lrec30, both estimated on the same
+# 50% author subsample (v2_mech.py --part sat -> v2_mech/sat_fit.pkl, key (0.5, 0, base|spline))
 # SUCC_FULL / SUCC_POP: five-group model / popularity group re-estimated with the succession features
 # (v2_mech.py --part succ_full -> v2_mech/succ_fit.pkl; features from v2_mech.SuccIndex, static given t)
 # growth ablations (v2_explore.py --part refit): popularity group of the five-group model re-estimated without
@@ -217,7 +219,11 @@ class Grow:
         p5 = CDIR / "v2_samples" / "P5" / "fit.pkl"
         self.p5 = pickle.load(open(p5, "rb")) if p5.exists() else None
         sys.path.insert(0, str(paths.REPO / "scripts"))
-        from v2_mech import SUCC, SuccIndex
+        from v2_mech import HINGE, SUCC, SuccIndex, hinge
+        self.hinge, self.HINGE = hinge, HINGE
+        sp_ = CDIR / "v2_mech" / "sat_fit.pkl"
+        self.sat_fit = pickle.load(open(sp_, "rb")) if sp_.exists() else None
+        self.hw = None  # weights on the hinge terms (SAT_SPL only)
         self.SUCC = SUCC
         self.succ = SuccIndex()
         sf = CDIR / "v2_mech" / "succ_fit.pkl"
@@ -245,6 +251,12 @@ class Grow:
         elif net == "EST_FE":
             w = self.bfe[:F].copy()
             fe = np.r_[0.0, self.bfe[F:]]
+        elif net in ("SAT_BASE", "SAT_SPL"):
+            R = self.sat_fit[(0.5, 0, "base" if net == "SAT_BASE" else "spline")]
+            c = dict(zip(R["feats"], R["coef"]))
+            w = np.array([c.get(f, 0.0) for f in self.feats])
+            if net == "SAT_SPL":
+                self.hw = np.array([c.get(f, 0.0) for f in self.HINGE])
         elif net in ("SUCC_FULL", "SUCC_POP"):
             R = self.succ_fit[net]
             c = dict(zip(R["feats"], R["coef"]))
@@ -496,6 +508,8 @@ class Grow:
                             self.sim_par[k] = int(self.ch.parent.at[k])
                     else:
                         v = Xf @ w + fe_u[fe] - np.concatenate(lq2)
+                        if self.hw is not None:
+                            v = v + self.hinge(Xf[:, self.feats.index("log_deg")], Xf[:, self.feats.index("lrec30")]) @ self.hw
                         if self.wx is not None:
                             v = v + self.succ.matrix(rows.cand_id.to_numpy(), self.ch.t.loc[rows.choice_id].to_numpy()) @ self.wx
                         s = 0
@@ -634,6 +648,7 @@ if __name__ == "__main__":
     ap.add_argument("--until", help="stop after this month (YYYY-MM); output in grow/mech/")
     ap.add_argument("--s5-task", type=int, help="array id -> S5 subset id // n, seed id % n (n = --s5-nseeds)")
     ap.add_argument("--s5-nseeds", type=int, default=2)
+    ap.add_argument("--nseeds", type=int, default=5, help="--task: seeds per network")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--task", type=int, help="array task id -> (net, seed): net = NETS[id // 5], seed = id % 5")
     ap.add_argument("--save-rows", action="store_true")
@@ -648,7 +663,7 @@ if __name__ == "__main__":
         recovery()
     else:
         if a.task is not None:
-            a.net, a.seed = NETS[a.task // 5], a.task % 5
+            a.net, a.seed = NETS[a.task // a.nseeds], a.task % a.nseeds
         if a.s5_task is not None:
             a.net, a.seed = S5_NETS[a.s5_task // a.s5_nseeds], a.s5_task % a.s5_nseeds
         simulate(a.net, a.seed, a.save_rows or (a.seed == 0 and a.net in ("SF", "QF", "EST") and not a.until), a.until)
