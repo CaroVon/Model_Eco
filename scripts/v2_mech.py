@@ -720,9 +720,102 @@ def part_shape(test, fracs, seeds):
           "relative to d = 1 / r = 0. LR_vs_first = against the first model of the test on the same subsample.")
 
 
+# ---------------------------------------------------------------- the top of the kernel: superstar bonus or xi?
+DEG_TOP = DEG_FINE + [10000]
+KNOTS_TOP = KNOTS["log_deg"] + [np.log(3000), np.log(10000)]
+HINGE_TOP = [f"log_deg_t{i}" for i in range(len(KNOTS_TOP))] + [f"lrec30_h{i}" for i in range(len(KNOTS["lrec30"]))]
+
+
+def fit_fe(tr, ho, feats, ch, fe):
+    from hfpa.models.clogit import CLogit, to_buckets, uniform_ll
+    D = to_buckets(tr, feats, fe_col="fe" if fe else None)
+    Dh = to_buckets(ho, feats, fe_col="fe" if fe else None)
+    m = CLogit(len(feats), n_fe=500 if fe else 0, l2_fe=1e-4 if fe else 0.0)
+    res = m.fit(D, cluster=None if fe else ch.author.reindex(D.choice_ids).to_numpy())
+    hold = float(m.ll_per_choice(Dh).mean() - uniform_ll(Dh).mean())
+    se = res["se"] if fe else res["se_cl"]
+    n = D.n
+    del D, Dh
+    return dict(ll=res["ll"], hold_gain=hold, n=n, coef=dict(zip(feats, res["coef"][: len(feats)])),
+                se=dict(zip(feats, se[: len(feats)])))
+
+
+def part_top(fracs, seeds):
+    from hfpa.features.groups import GROUPS5
+    from v2_explore import subsample
+    from hfpa.v2data import drop_constant
+    rows, ch = load_rows(SPEC, "planA")
+    base = sum(GROUPS5.values(), [])
+    d, r = counts(rows.log_deg.to_numpy(), rows.lrec30.to_numpy())
+    B, bnames = step_basis(rows.log_deg.to_numpy(), rows.lrec30.to_numpy(), DEG_TOP, REC_FINE)
+    for i, c in enumerate(bnames):
+        rows[c] = B[:, i].astype(np.float32)
+    ld = rows.log_deg.to_numpy(np.float64)
+    for i, k in enumerate(KNOTS_TOP):
+        rows[f"log_deg_t{i}"] = np.maximum(ld - k, 0).astype(np.float32)
+    H = hinge(rows.log_deg.to_numpy(), rows.lrec30.to_numpy())
+    for i, c in enumerate(HINGE):
+        if c.startswith("lrec30"):
+            rows[c] = H[:, i].astype(np.float32)
+    # descriptive: who sits in the top bins (training choices)
+    tr_all, _ = split(rows, ch)
+    C = tr_all[tr_all.chosen == 1]
+    dc = np.rint(np.exp(C.log_deg.to_numpy()))
+    desc = []
+    for lo, hi in ((1000, 3000), (3000, 10000), (10000, np.inf)):
+        k = (dc >= lo) & (dc < hi) & (C.has_deg.to_numpy() > 0)
+        desc.append(dict(bin=f"[{lo}, {hi})", chosen=int(k.sum()), share_of_choices=float(k.mean()),
+                         distinct_parents=int(C.cand_id[k].nunique()),
+                         top5_parents_share_of_bin=float(C.cand_id[k].value_counts().iloc[:5].sum() / max(k.sum(), 1))))
+    write(pd.DataFrame(desc), "v2m_top_desc", "Top of the kernel: chosen parents in the highest degree bins "
+          "(training first adoptions)")
+    print(desc, flush=True)
+    steps = [f for f in base if f not in ("log_deg", "lrec30")] + bnames
+    hin = base + HINGE_TOP
+    out = []
+    for f in fracs:
+        for s in (seeds if f < 1 else [0]):
+            R = subsample(rows, ch, f, s)
+            tr, ho = split(R, ch)
+            top10 = tr[tr.chosen == 1].cand_id.value_counts().index[:10]
+            drop = lambda X: X[~X.cand_id.isin(top10)].pipe(
+                lambda Y: Y[Y.groupby("choice_id").chosen.transform("max") == 1]).reset_index(drop=True)
+            for name, feats0, fe, dt in (("steps", steps, False, False), ("steps + hub FE", steps, True, False),
+                                         ("hinge", hin, False, False), ("hinge + hub FE", hin, True, False),
+                                         ("hinge, top-10 hubs dropped", hin, False, True)):
+                a, b = (drop(tr), drop(ho)) if dt else (tr, ho)
+                feats = drop_constant(a, feats0)
+                res = fit_fe(a, b, feats, ch, fe)
+                c, se = res["coef"], res["se"]
+                rec = dict(model=name, frac=f, seed=s, n=res["n"], ll=res["ll"], hold_gain=res["hold_gain"])
+                if name.startswith("steps"):
+                    for x in bnames:
+                        if x.startswith("d_bin") and int(x.split("_")[-1]) >= 500:
+                            rec[f"b_{x}"], rec[f"se_{x}"] = float(c.get(x, np.nan)), float(se.get(x, np.nan))
+                else:
+                    sl = c.get("log_deg", 0.0)
+                    edges = ["<10", "10-100", "100-1000", "1000-3000", "3000-10000", ">10000"]
+                    rec[f"deg_slope_{edges[0]}"] = sl
+                    for i in range(len(KNOTS_TOP)):
+                        sl += c.get(f"log_deg_t{i}", 0.0)
+                        rec[f"deg_slope_{edges[i + 1]}"] = sl
+                    rs = c.get("lrec30", 0.0) + sum(c.get(f"lrec30_h{i}", 0.0) for i in range(len(KNOTS["lrec30"])))
+                    rec["rec_slope_top"] = rs
+                    rec["kappa_top(>10000)"] = sl + rs
+                out.append(rec)
+                print({k: (round(v, 3) if isinstance(v, float) else v) for k, v in rec.items() if not k.startswith("se_")},
+                      flush=True)
+    write(pd.DataFrame(out), "v2m_top", "Top of the kernel (author subsamples): highest degree bins and hinge "
+          "slopes, without / with hub FE, and with the 10 most-chosen hubs dropped",
+          "Steps: b_d_bin_<lo> = utility relative to d = 1 (d_bin_10000 = d >= 10000). Hinge knots for log_deg at "
+          "d = 10, 100, 1000, 3000, 10000. kappa_top = degree slope above 10000 + momentum slope above 100 recent "
+          "adoptions. Hub FE: 500 ex-ante hubs, ridge 1e-4, analytic SE. Dropping hubs removes them from every "
+          "candidate set (valid under IIA) and drops the choices of them.")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full", "support", "sat", "xi", "shape"])
+    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full", "support", "sat", "xi", "shape", "top"])
     ap.add_argument("--test", choices=["np", "bc", "rank", "conf", "type"])
     ap.add_argument("--fracs", type=float, nargs="*", default=[0.1, 0.25, 0.5])
     ap.add_argument("--seeds", type=int, nargs="*", default=[0, 1])
@@ -744,6 +837,8 @@ if __name__ == "__main__":
         part_sat(a.fracs, a.seeds)
     if a.part == "xi":
         part_xi(a.fracs, a.seeds)
+    if a.part == "top":
+        part_top(a.fracs, a.seeds)
     if a.part == "shape":
         part_shape(a.test, a.fracs, a.seeds)
     if a.part == "p2":
