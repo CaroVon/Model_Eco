@@ -48,7 +48,11 @@ from hfpa.features.text import row_cosine
 SPEC = "v2_pps"
 DAY = 86400
 S_PPS = 300
-NETS = ["SF", "QF", "EST", "SF_FE", "EST_FE", "SF_NOMOM", "SF_CUM", "SUCC_FULL", "SUCC_POP", "SAT_BASE", "SAT_SPL"]
+NETS = ["SF", "QF", "EST", "SF_FE", "EST_FE", "SF_NOMOM", "SF_CUM", "SUCC_FULL", "SUCC_POP", "SAT_BASE", "SAT_SPL",
+        "NP_LIN", "NP_STEPC", "NP_STEPF", "NP_HINGE"]
+# NP_*: sieve check of the kernel shape, five-group model with linear / coarse steps / fine steps / hinge popularity
+# terms, all estimated on the same 50% author subsample (v2_mech.py --part shape --test np -> shape_fit_np.pkl)
+NP_MODELS = {"NP_LIN": "linear", "NP_STEPC": "steps_coarse", "NP_STEPF": "steps_fine", "NP_HINGE": "hinge"}
 # SAT_BASE / SAT_SPL: five-group model without / with hinge terms on log_deg and lrec30, both estimated on the same
 # 50% author subsample (v2_mech.py --part sat -> v2_mech/sat_fit.pkl, key (0.5, 0, base|spline))
 # SUCC_FULL / SUCC_POP: five-group model / popularity group re-estimated with the succession features
@@ -219,7 +223,11 @@ class Grow:
         p5 = CDIR / "v2_samples" / "P5" / "fit.pkl"
         self.p5 = pickle.load(open(p5, "rb")) if p5.exists() else None
         sys.path.insert(0, str(paths.REPO / "scripts"))
-        from v2_mech import HINGE, SUCC, SuccIndex, hinge
+        from v2_mech import BASES, HINGE, SUCC, SuccIndex, hinge
+        self.BASES = BASES
+        npf = CDIR / "v2_mech" / "shape_fit_np.pkl"
+        self.np_fit = pickle.load(open(npf, "rb")) if npf.exists() else None
+        self.basis = None  # (basis function, weights) for the NP_* nets
         self.hinge, self.HINGE = hinge, HINGE
         sp_ = CDIR / "v2_mech" / "sat_fit.pkl"
         self.sat_fit = pickle.load(open(sp_, "rb")) if sp_.exists() else None
@@ -251,6 +259,15 @@ class Grow:
         elif net == "EST_FE":
             w = self.bfe[:F].copy()
             fe = np.r_[0.0, self.bfe[F:]]
+        elif net in NP_MODELS:
+            nm = NP_MODELS[net]
+            R = self.np_fit[("np", nm, 0.5, 0)]
+            c = dict(zip(R["feats"], R["coef"]))
+            w = np.array([c.get(f, 0.0) for f in self.feats])
+            if nm in self.BASES:
+                fn = self.BASES[nm]
+                _, names = fn(np.zeros(1), np.zeros(1))
+                self.basis = (fn, np.array([c.get(x, 0.0) for x in names]))
         elif net in ("SAT_BASE", "SAT_SPL"):
             R = self.sat_fit[(0.5, 0, "base" if net == "SAT_BASE" else "spline")]
             c = dict(zip(R["feats"], R["coef"]))
@@ -508,6 +525,9 @@ class Grow:
                             self.sim_par[k] = int(self.ch.parent.at[k])
                     else:
                         v = Xf @ w + fe_u[fe] - np.concatenate(lq2)
+                        if self.basis is not None:
+                            B, _ = self.basis[0](Xf[:, self.feats.index("log_deg")], Xf[:, self.feats.index("lrec30")])
+                            v = v + B @ self.basis[1]
                         if self.hw is not None:
                             v = v + self.hinge(Xf[:, self.feats.index("log_deg")], Xf[:, self.feats.index("lrec30")]) @ self.hw
                         if self.wx is not None:

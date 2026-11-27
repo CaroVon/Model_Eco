@@ -545,9 +545,185 @@ def part_xi(fracs, seeds):
           "rel = 1 - mean(se^2) / var(phi) (analytic SE).")
 
 
+# ---------------------------------------------------------------- shape of the popularity response (kernel)
+# step functions (sieve): degree d >= 1 (reference [1, 2); d = 0 is has_deg), recent adoptions r (reference 0)
+DEG_FINE, DEG_COARSE = [2, 3, 5, 10, 20, 50, 100, 200, 500, 1000, 3000], [2, 10, 100, 1000]
+REC_FINE, REC_COARSE = [1, 2, 3, 5, 10, 20, 50, 100, 300], [1, 5, 20, 100]
+
+
+def counts(log_deg, lrec30):
+    d = np.rint(np.exp(np.asarray(log_deg, np.float64)))  # log max(d, 1): d = 0 and 1 both give 1 (has_deg separates)
+    r = np.rint(np.expm1(np.asarray(lrec30, np.float64)))
+    return d, r
+
+
+def step_basis(log_deg, lrec30, deg_edges, rec_edges):
+    d, r = counts(log_deg, lrec30)
+    cols, names = [], []
+    for v, x, ed in (("d", d, deg_edges), ("r", r, rec_edges)):
+        e = list(ed) + [np.inf]
+        for lo, hi in zip(e[:-1], e[1:]):
+            cols.append(((x >= lo) & (x < hi)).astype(np.float64))
+            names.append(f"{v}_bin_{int(lo)}")
+    return np.column_stack(cols), names
+
+
+BASES = {"steps_fine": lambda a, b: step_basis(a, b, DEG_FINE, REC_FINE),
+         "steps_coarse": lambda a, b: step_basis(a, b, DEG_COARSE, REC_COARSE),
+         "hinge": lambda a, b: (hinge(a, b), HINGE)}
+
+
+def boxcox(x, lam):
+    x = np.asarray(x, np.float64)
+    return np.log(x) if abs(lam) < 1e-9 else (x ** lam - 1) / lam
+
+
+def fit_one(tr, ho, feats, ch):
+    from hfpa.models.clogit import CLogit, to_buckets, uniform_ll
+    D, Dh = to_buckets(tr, feats), to_buckets(ho, feats)
+    m = CLogit(len(feats))
+    res = m.fit(D, cluster=ch.author.reindex(D.choice_ids).to_numpy())
+    hold = float(m.ll_per_choice(Dh).mean() - uniform_ll(Dh).mean())
+    n = D.n
+    del D, Dh
+    return dict(ll=res["ll"], hold_gain=hold, n=n, coef=dict(zip(feats, res["coef"])), se=dict(zip(feats, res["se_cl"])))
+
+
+def slopes(c):
+    out = {}
+    for v, ks in KNOTS.items():
+        sl = c.get(v, 0.0)
+        out[f"{v}_slope_0"] = sl
+        for i in range(len(ks)):
+            sl += c.get(f"{v}_h{i}", 0.0)
+            out[f"{v}_slope_{i + 1}"] = sl
+    return out
+
+
+def rank_features(rows, t):
+    """Rank of the candidate by degree within its modality at the start of the choice's month (1 = most adopted),
+    from the real first-adoption-relevant edges: log(rank), top-10 and top-100 indicators."""
+    from hfpa.features.groups import MAIN
+    nodes = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["birth", "modality_code"])
+    birth, mod = nodes.birth.to_numpy(np.int64), nodes.modality_code.to_numpy(np.int64)
+    E = pd.read_parquet(paths.PROCESSED / "edges" / "edges.parquet", columns=["child_idx", "parent_idx", "rel_type"])
+    E = E[E.rel_type.isin(MAIN)]
+    et, ep = birth[E.child_idx.to_numpy()], E.parent_idx.to_numpy(np.int64)
+    mon = pd.to_datetime(t, unit="s").to_period("M")
+    starts = {m: int(m.to_timestamp().timestamp()) for m in mon.unique()}
+    c = rows.cand_id.to_numpy(np.int64)
+    rank = np.full(len(rows), np.nan)
+    M = mod.max() + 1
+    for m, t0 in starts.items():
+        sel = np.flatnonzero(mon == m)
+        deg = np.bincount(ep[et < t0], minlength=len(birth))
+        alive = np.flatnonzero((birth < t0) & (deg > 0))
+        for mm in range(M):
+            a = alive[mod[alive] == mm]
+            if not len(a):
+                continue
+            srt = np.sort(deg[a])
+            s2 = sel[mod[c[sel]] == mm]
+            rank[s2] = len(srt) - np.searchsorted(srt, deg[c[s2]], "right") + 1
+    rank = np.where(np.isnan(rank), 1e6, rank)
+    used = (np.exp(rows.log_deg.to_numpy()) >= 1) & (rows.has_deg.to_numpy() > 0)
+    return {"log_rank": np.where(used, np.log(rank), np.log(1e6)).astype(np.float32),
+            "top10_mod": (used & (rank <= 10)).astype(np.float32),
+            "top100_mod": (used & (rank <= 100)).astype(np.float32)}
+
+
+AGE_KNOTS = [np.log1p(30), np.log1p(90), np.log1p(180), np.log1p(365)]
+
+
+def part_shape(test, fracs, seeds):
+    from hfpa.features.groups import GROUPS5
+    from v2_explore import subsample
+    from hfpa.v2data import drop_constant
+    rows, ch = load_rows(SPEC, "planA")
+    t_all = ch.t.reindex(rows.choice_id).to_numpy(np.int64)
+    base = sum(GROUPS5.values(), [])
+    H = hinge(rows.log_deg.to_numpy(), rows.lrec30.to_numpy())
+    for i, c in enumerate(HINGE):
+        rows[c] = H[:, i].astype(np.float32)
+    models = {}
+    if test == "np":
+        models["linear"] = base
+        for nm in ("steps_coarse", "steps_fine"):
+            B, names = BASES[nm](rows.log_deg.to_numpy(), rows.lrec30.to_numpy())
+            for i, c in enumerate(names):
+                rows[c] = B[:, i].astype(np.float32)
+            models[nm] = [f for f in base if f not in ("log_deg", "lrec30")] + names
+        models["hinge"] = base + HINGE
+    elif test == "bc":
+        d, r = counts(rows.log_deg.to_numpy(), rows.lrec30.to_numpy())
+        grid = [-0.6, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.4]
+        for lam in grid:
+            rows[f"bcd_{lam}"] = boxcox(np.maximum(d, 1), lam).astype(np.float32)
+            rows[f"bcr_{lam}"] = boxcox(1 + r, lam).astype(np.float32)
+        for lam in grid:  # one-dimensional profiles, the other variable at its log form
+            models[f"deg lambda={lam}"] = [f if f != "log_deg" else f"bcd_{lam}" for f in base]
+            models[f"rec lambda={lam}"] = [f if f != "lrec30" else f"bcr_{lam}" for f in base]
+    elif test == "rank":
+        Rf = rank_features(rows, t_all)
+        for k, v in Rf.items():
+            rows[k] = v
+        models["hinge"] = base + HINGE
+        models["hinge + rank"] = base + HINGE + list(Rf)
+        models["linear + rank"] = base + list(Rf)
+    elif test == "conf":
+        Xs = SuccIndex().matrix(rows.cand_id.to_numpy(), t_all)
+        for i, c in enumerate(SUCC):
+            rows[c] = Xs[:, i].astype(np.float32)
+        la = rows.log_age.to_numpy(np.float64)
+        ages = [f"log_age_h{i}" for i in range(len(AGE_KNOTS))]
+        for i, k in enumerate(AGE_KNOTS):
+            rows[ages[i]] = np.maximum(la - k, 0).astype(np.float32)
+        models["hinge"] = base + HINGE
+        models["hinge + age shape"] = base + HINGE + ages
+        models["hinge + age shape + succession"] = base + HINGE + ages + SUCC
+    elif test == "type":
+        at = ch.author.map(__import__("v2_samples").author_types())
+        grp = at.map({"indiv_light": "novice individuals", "indiv_mid": "experienced individuals",
+                      "indiv_heavy": "experienced individuals", "org_other": "organizations",
+                      "org_redistributor": "organizations", "org_major": "organizations"})
+        for g in ("novice individuals", "experienced individuals", "organizations"):
+            models[g] = (base + HINGE, set(ch.index[(grp == g).to_numpy()]))
+    out, save = [], {}
+    for f in fracs:
+        for s in (seeds if f < 1 else [0]):
+            R = subsample(rows, ch, f, s)
+            tr0, ho0 = split(R, ch)
+            ref = None
+            for name, spec in models.items():
+                feats0, keep = (spec if isinstance(spec, tuple) else (spec, None))
+                tr, ho = (tr0, ho0) if keep is None else (tr0[tr0.choice_id.isin(keep)], ho0[ho0.choice_id.isin(keep)])
+                feats = drop_constant(tr, feats0)
+                r = fit_one(tr.reset_index(drop=True), ho.reset_index(drop=True), feats, ch)
+                save[(test, name, f, s)] = dict(feats=feats, coef=np.array([r["coef"][x] for x in feats]))
+                rec = dict(test=test, model=name, frac=f, seed=s, n=r["n"], ll=r["ll"], hold_gain=r["hold_gain"],
+                           k=len(feats))
+                if keep is None:
+                    ref = ref if ref is not None else r["ll"]
+                    rec["LR_vs_first"] = 2 * (r["ll"] - ref)
+                rec.update(slopes(r["coef"]))
+                for x, v in r["coef"].items():
+                    if x.startswith(("d_bin", "r_bin", "log_rank", "top10", "top100", "superseded", "log_newer",
+                                     "log_age", "has_deg")):
+                        rec[f"b_{x}"], rec[f"se_{x}"] = float(v), float(r["se"][x])
+                out.append(rec)
+                print({k: (round(v, 4) if isinstance(v, float) else v) for k, v in rec.items()
+                       if not k.startswith("se_")}, flush=True)
+    pickle.dump(save, open(OUT / f"shape_fit_{test}.pkl", "wb"))  # one file per test (jobs run in parallel)
+    write(pd.DataFrame(out), f"v2m_shape_{test}", f"Shape of the popularity response, test '{test}' (author "
+          "subsamples)", "slope_i = utility slope of the hinge model in segment i (log_deg knots d = 10, 100, 1000; "
+          "lrec30 knots 3, 10, 30, 100). Step models: b_d_bin_<lo> / b_r_bin_<lo> = utility of the degree / recent bin "
+          "relative to d = 1 / r = 0. LR_vs_first = against the first model of the test on the same subsample.")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full", "support", "sat", "xi"])
+    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full", "support", "sat", "xi", "shape"])
+    ap.add_argument("--test", choices=["np", "bc", "rank", "conf", "type"])
     ap.add_argument("--fracs", type=float, nargs="*", default=[0.1, 0.25, 0.5])
     ap.add_argument("--seeds", type=int, nargs="*", default=[0, 1])
     a = ap.parse_args()
@@ -568,6 +744,8 @@ if __name__ == "__main__":
         part_sat(a.fracs, a.seeds)
     if a.part == "xi":
         part_xi(a.fracs, a.seeds)
+    if a.part == "shape":
+        part_shape(a.test, a.fracs, a.seeds)
     if a.part == "p2":
         part_p2(a.fracs, a.seeds)
     if a.part == "p2b":
