@@ -813,9 +813,79 @@ def part_top(fracs, seeds):
           "candidate set (valid under IIA) and drops the choices of them.")
 
 
+# ---------------------------------------------------------------- kernel, full data (main specification)
+KERNEL_MODELS = {"K_LIN": ("linear", False), "K_HINGE": ("hinge", False), "K_HINGE_FE": ("hinge", True)}
+
+
+def part_kernel_full():
+    """Full-data fits of the three kernel specifications used by the growth simulator (v2_grow.py K_*): linear
+    (log-linear kernel, the five-group model), hinge (knots log_deg d = 10, 100, 1000; lrec30 r = 3, 10, 30, 100)
+    and hinge + hub FE -> v2_mech/kernel_fit.pkl, v2m_kernel_full."""
+    from hfpa.features.groups import GROUPS5
+    from hfpa.models.clogit import CLogit, to_buckets, uniform_ll
+    from hfpa.v2data import drop_constant
+    rows, ch = load_rows(SPEC, "planA")
+    H = hinge(rows.log_deg.to_numpy(), rows.lrec30.to_numpy())
+    for i, c in enumerate(HINGE):
+        rows[c] = H[:, i].astype(np.float32)
+    tr, ho = split(rows, ch)
+    del rows
+    base = sum(GROUPS5.values(), [])
+    out, save = [], {}
+    for net, (form, fe) in KERNEL_MODELS.items():
+        feats = drop_constant(tr, base + (HINGE if form == "hinge" else []))
+        D = to_buckets(tr, feats, fe_col="fe" if fe else None)
+        Dh = to_buckets(ho, feats, fe_col="fe" if fe else None)
+        m = CLogit(len(feats), n_fe=500 if fe else 0, l2_fe=1e-4 if fe else 0.0)
+        res = m.fit(D, cluster=ch.author.reindex(D.choice_ids).to_numpy())
+        hold = float(m.ll_per_choice(Dh).mean() - uniform_ll(Dh).mean())
+        coef = np.asarray(res["coef"])
+        save[net] = dict(feats=feats, coef=coef[: len(feats)], fe=np.r_[0.0, coef[len(feats):]] if fe else np.zeros(501))
+        c, se = dict(zip(feats, coef)), dict(zip(feats, res["se_cl"]))
+        rec = dict(model=net, form=form, hub_fe=fe, n=D.n, ll=res["ll"], hold_gain=hold, k=len(coef))
+        rec.update(slopes(c))
+        for x in ["has_deg", "log_deg", "lrec30"] + HINGE:
+            if x in se:
+                rec[f"se_{x}"] = float(se[x])
+        out.append(rec)
+        print({k: (round(v, 4) if isinstance(v, float) else v) for k, v in rec.items() if not k.startswith("se_")}, flush=True)
+        del D, Dh
+    pickle.dump(save, open(OUT / "kernel_fit.pkl", "wb"))
+    write(pd.DataFrame(out), "v2m_kernel_full", "Kernel specifications, full data (training first adoptions): "
+          "linear vs hinge vs hinge + hub FE", "slope_i = utility slope in segment i (log_deg: d < 10, 10-100, "
+          "100-1000, > 1000; lrec30: r < 3, 3-10, 10-30, 30-100, > 100). SE clustered by author.")
+
+
+def part_mechnets():
+    """Metrics of every network in grow/mech/ (<net>__<until>__<seed>.parquet) and of the real first adoptions of
+    the same choices, per horizon -> v2m_mech_nets (one row per network x horizon x seed)."""
+    from v2_networks import metrics
+    nodes = pd.read_parquet(paths.PROCESSED / "nodes" / "nodes.parquet", columns=["root", "author"])
+    org = pd.factorize(nodes.author)[0][nodes.root.to_numpy()]
+    ch = pd.read_parquet(CDIR / "decisions.parquet", columns=["choice_id", "t"]).set_index("choice_id").t
+    rec, done_real = [], set()
+    for f in sorted(glob.glob(str(OUTD / "mech" / "*__*__*.parquet"))):
+        net, until, seed = os.path.basename(f)[:-8].split("__")
+        r = pd.read_parquet(f)
+        t = ch.loc[r.choice_id].to_numpy()
+        for lab, par in [(net, r.sim_parent.to_numpy())] + ([("REAL", r.real_parent.to_numpy())] if until not in done_real else []):
+            m, mo = metrics(par, t), metrics(org[par], t)
+            real_top = set(r.real_parent.value_counts().index[:10])
+            rec.append(dict(network=lab, until=until, seed=int(seed) if lab != "REAL" else 0, n=len(r), top10=m["top10"],
+                            eff_parents=m["eff_parents"], gini=m["gini"], tail_alpha=m["tail_alpha"],
+                            turnover=m["turnover"], n_parents=m["n_parents"], org_top10=mo["top10"],
+                            org_turnover=mo["turnover"],
+                            overlap_real_top10=len(set(pd.Series(par).value_counts().index[:10]) & real_top) / 10))
+        done_real.add(until)
+    write(pd.DataFrame(rec), "v2m_mech_nets", "All growth networks of the mechanism round (grow/mech) with the real "
+          "network of the same choices, by horizon",
+          "SAT_* / NP_*: 50% author-subsample fits; S5_*: five-group subset fits on the full data. Metrics as in "
+          "v2_networks.metrics; org = author of the lineage root.")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full", "support", "sat", "xi", "shape", "top"])
+    ap.add_argument("--part", required=True, choices=["p0", "p2", "p2b", "s5", "succ_full", "support", "sat", "xi", "shape", "top", "kernel_full", "mechnets"])
     ap.add_argument("--test", choices=["np", "bc", "rank", "conf", "type"])
     ap.add_argument("--fracs", type=float, nargs="*", default=[0.1, 0.25, 0.5])
     ap.add_argument("--seeds", type=int, nargs="*", default=[0, 1])
@@ -837,6 +907,10 @@ if __name__ == "__main__":
         part_sat(a.fracs, a.seeds)
     if a.part == "xi":
         part_xi(a.fracs, a.seeds)
+    if a.part == "mechnets":
+        part_mechnets()
+    if a.part == "kernel_full":
+        part_kernel_full()
     if a.part == "top":
         part_top(a.fracs, a.seeds)
     if a.part == "shape":

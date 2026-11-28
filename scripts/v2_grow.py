@@ -49,7 +49,9 @@ SPEC = "v2_pps"
 DAY = 86400
 S_PPS = 300
 NETS = ["SF", "QF", "EST", "SF_FE", "EST_FE", "SF_NOMOM", "SF_CUM", "SUCC_FULL", "SUCC_POP", "SAT_BASE", "SAT_SPL",
-        "NP_LIN", "NP_STEPC", "NP_STEPF", "NP_HINGE"]
+        "NP_LIN", "NP_STEPC", "NP_STEPF", "NP_HINGE", "K_LIN", "K_HINGE", "K_HINGE_FE"]
+# K_*: main kernel specifications on the full data (v2_mech.py --part kernel_full -> kernel_fit.pkl):
+# log-linear popularity terms, hinge (piecewise-linear in log d and log(1 + r)), hinge + hub FE
 # NP_*: sieve check of the kernel shape, five-group model with linear / coarse steps / fine steps / hinge popularity
 # terms, all estimated on the same 50% author subsample (v2_mech.py --part shape --test np -> shape_fit_np.pkl)
 NP_MODELS = {"NP_LIN": "linear", "NP_STEPC": "steps_coarse", "NP_STEPF": "steps_fine", "NP_HINGE": "hinge"}
@@ -227,7 +229,9 @@ class Grow:
         self.BASES = BASES
         npf = CDIR / "v2_mech" / "shape_fit_np.pkl"
         self.np_fit = pickle.load(open(npf, "rb")) if npf.exists() else None
-        self.basis = None  # (basis function, weights) for the NP_* nets
+        self.basis = None  # (basis function, weights) for the NP_* and K_* nets
+        kf = CDIR / "v2_mech" / "kernel_fit.pkl"
+        self.kernel_fit = pickle.load(open(kf, "rb")) if kf.exists() else None
         self.hinge, self.HINGE = hinge, HINGE
         sp_ = CDIR / "v2_mech" / "sat_fit.pkl"
         self.sat_fit = pickle.load(open(sp_, "rb")) if sp_.exists() else None
@@ -259,6 +263,14 @@ class Grow:
         elif net == "EST_FE":
             w = self.bfe[:F].copy()
             fe = np.r_[0.0, self.bfe[F:]]
+        elif net in ("K_LIN", "K_HINGE", "K_HINGE_FE"):
+            R = self.kernel_fit[net]
+            c = dict(zip(R["feats"], R["coef"]))
+            w = np.array([c.get(f, 0.0) for f in self.feats])
+            fe = np.asarray(R["fe"], np.float64)
+            if net != "K_LIN":
+                fn = self.BASES["hinge"]
+                self.basis = (fn, np.array([c.get(x, 0.0) for x in self.HINGE]))
         elif net in NP_MODELS:
             nm = NP_MODELS[net]
             R = self.np_fit[("np", nm, 0.5, 0)]
